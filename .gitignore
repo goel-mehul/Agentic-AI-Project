@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Environment variables (NEVER commit your API keys)
+.env
+
+# Node
+node_modules/
+dist/
+
+# Mac
+.DS_Store
+
+# ChromaDB local data
+chroma_db/
