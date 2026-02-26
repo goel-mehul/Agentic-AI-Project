@@ -33,6 +33,34 @@ from .critic import critic_agent
 from .writer import writer_agent
 from .fact_checker import fact_checker_agent
 
+def should_search_again(state: ResearchState) -> str:
+    """
+    Routing function: decides whether to loop back to Search or continue to Writer.
+
+    Loops back if ALL of these are true:
+    - We've done fewer than 2 extra search passes (prevents infinite loops)
+    - The Critic found at least 2 gaps (worth searching again)
+    - We have fewer than 35 papers (don't over-collect)
+
+    Otherwise: proceed to Writer.
+    """
+    iteration   = state.get("search_iteration", 0)
+    gaps        = state.get("gaps", [])
+    raw_papers  = state.get("raw_papers", [])
+    gap_queries = state.get("gap_queries", [])
+
+    # Safety limits
+    if iteration >= 3:           # Already done 2 extra passes (1 original + 2 loops)
+        return "writer"
+    if len(gaps) < 2:            # Not enough gaps to justify another search
+        return "writer"
+    if len(raw_papers) >= 35:    # Already have plenty of papers
+        return "writer"
+    if not gap_queries:          # No gap queries generated
+        return "writer"
+
+    return "search"              # Loop back for another retrieval pass
+
 
 def build_research_graph() -> StateGraph:
     """
@@ -68,7 +96,18 @@ def build_research_graph() -> StateGraph:
     # add_edge defines the linear flow
     graph.add_edge("planner",      "search")
     graph.add_edge("search",       "critic")
-    graph.add_edge("critic",       "writer")
+
+    # Conditional edge: Critic → Search (loop) or Critic → Writer (continue)
+    graph.add_conditional_edges(
+        "critic",
+        should_search_again,
+        {
+            "search": "search",   # Loop back for more retrieval
+            "writer": "writer"    # Proceed to writing
+        }
+    )
+
+    # Linear flow after Writer
     graph.add_edge("writer",       "fact_checker")
     graph.add_edge("fact_checker", END)
 
@@ -111,3 +150,4 @@ def create_initial_state(research_question: str) -> ResearchState:
 # We compile the graph once when this module is imported, then reuse it
 # for every research request. Compiling is expensive; running is cheap.
 research_graph = build_research_graph()
+
