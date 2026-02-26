@@ -102,7 +102,7 @@ def _search_semantic_scholar(query: str, max_results: int = 3) -> list[dict]:
         params = {
             "query": query,
             "limit": max_results,
-            "fields": "title,authors,abstract,year,url"
+            "fields": "title,authors,abstract,year,url,citationCount"
         }
         resp = requests.get(url, params=params, timeout=10)
 
@@ -119,7 +119,8 @@ def _search_semantic_scholar(query: str, max_results: int = 3) -> list[dict]:
                     "published": str(p.get("year", "Unknown")),
                     "source": "semantic_scholar",
                     "url": p.get("url", ""),
-                    "relevance_score": 0.9
+                    "relevance_score": 0.9,
+                    "citation_count": p.get("citationCount", 0)
                 })
     except Exception as e:
         print(f"[Search] Semantic Scholar error for '{query}': {e}")
@@ -243,9 +244,22 @@ def search_agent(state: ResearchState) -> ResearchState:
                 all_papers.append(paper)
 
     state["raw_papers"] = all_papers
+    # Build citation count lookup — used by the Critic for quality scoring
+    citation_counts = {}
+    for paper in all_papers:
+        pid = paper.get("paper_id", "")
+        count = paper.get("citation_count", 0)
+        if pid and count:
+            citation_counts[pid] = count
+
+    state["citation_counts"] = citation_counts
+
+    # Log how many papers have citation data
+    papers_with_citations = sum(1 for p in all_papers if p.get("citation_count", 0) > 0)
     state["agent_logs"] = [
         f"📚 Search: Collected {len(all_papers)} unique papers",
-        "🧮 Search: Indexing in ChromaDB and retrieving top matches..."
+        f"📊 Search: Citation data available for {papers_with_citations} papers",
+        "🧮 Search: Indexing papers in vector store and retrieving relevant context..."
     ]
 
     # Store in vector DB and retrieve most relevant chunks
