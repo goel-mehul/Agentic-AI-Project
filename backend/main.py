@@ -1,0 +1,275 @@
+"""
+main.py — FastAPI Backend
+==========================
+
+WHAT IT DOES:
+    Exposes the multi-agent pipeline as a web service with:
+    - POST /research      — Start a research session
+    - GET  /research/{id} — Poll for results
+    - WS   /ws/{id}       — Stream real-time agent updates
+
+WHY IT EXISTS:
+    The React frontend can't import Python directly. FastAPI creates
+    an HTTP/WebSocket interface that any frontend (or API client) can use.
+
+HOW IT FITS:
+    Sits between the pipeline (backend) and the UI (frontend).
+    The pipeline is synchronous Python; FastAPI makes it async-compatible
+    and exposes it over the network.
+
+WHAT YOU'RE LEARNING:
+    - FastAPI basics (routes, request/response models)
+    - WebSockets for real-time communication
+    - Running blocking code in async context (asyncio + threads)
+    - In-memory session management
+"""
+
+import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from agents.pipeline import research_graph, create_initial_state
+
+# ── App setup ─────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="Multi-Agent Research Scientist",
+    description="5-agent AI pipeline for academic research synthesis",
+    version="1.0.0"
+)
+
+# CORS allows the React frontend (localhost:5173) to call this API
+# Without this, browsers block cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Thread pool for running the synchronous LangGraph pipeline
+# in a way that doesn't block FastAPI's async event loop
+executor = ThreadPoolExecutor(max_workers=4)
+
+# In-memory session store: session_id -> state dict
+# In production you'd use Redis; this is fine for a portfolio project
+sessions: dict[str, dict] = {}
+
+# Active WebSocket connections: session_id -> WebSocket
+active_connections: dict[str, WebSocket] = {}
+
+
+# ── Request / Response models ─────────────────────────────────────────────────
+
+class ResearchRequest(BaseModel):
+    question: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "question": "What techniques reduce hallucinations in LLMs?"
+            }
+        }
+
+
+class ResearchResponse(BaseModel):
+    session_id: str
+    status: str
+    message: str
+
+
+# ── WebSocket helper ──────────────────────────────────────────────────────────
+
+async def send_update(session_id: str, payload: dict):
+    """Send a JSON update to the WebSocket client for this session."""
+    ws = active_connections.get(session_id)
+    if ws:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            # Client disconnected — that's OK, just stop sending
+            active_connections.pop(session_id, None)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.get("/")
+async def root():
+    """Health check — confirms the API is running."""
+    return {
+        "service": "Multi-Agent Research Scientist",
+        "status": "running",
+        "agents": ["planner", "search", "critic", "writer", "fact_checker"],
+        "docs": "/docs"
+    }
+
+
+@app.post("/research", response_model=ResearchResponse)
+async def start_research(request: ResearchRequest):
+    """
+    Start a new research session.
+
+    Creates initial state, starts the pipeline in the background,
+    and immediately returns a session_id. The frontend uses this
+    session_id to connect via WebSocket for live updates.
+    """
+    if not request.question.strip():
+        raise HTTPException(status_code=400, detail="Research question cannot be empty")
+
+    # Build initial state
+    state = create_initial_state(request.question)
+    session_id = state["session_id"]
+
+    # Store placeholder so WebSocket can find it immediately
+    sessions[session_id] = {"status": "running", "state": None}
+
+    # Run pipeline in background — don't await it here
+    asyncio.create_task(_run_pipeline(session_id, state))
+
+    return ResearchResponse(
+        session_id=session_id,
+        status="running",
+        message="Pipeline started. Connect via WebSocket for live updates."
+    )
+
+
+@app.get("/research/{session_id}")
+async def get_result(session_id: str):
+    """
+    Get the result of a completed research session.
+    Use this to poll for results if not using WebSocket.
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = sessions[session_id]
+
+    if session["status"] == "running":
+        return {"status": "running", "message": "Research in progress..."}
+
+    state = session.get("state", {})
+    return {
+        "status":            state.get("status", "unknown"),
+        "session_id":        session_id,
+        "research_question": state.get("research_question", ""),
+        "final_report":      state.get("final_report", ""),
+        "papers_found":      len(state.get("raw_papers", [])),
+        "contradictions":    state.get("contradictions", []),
+        "gaps":              state.get("gaps", []),
+        "fact_check_notes":  state.get("fact_check_notes", [])
+    }
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for real-time pipeline updates.
+
+    The frontend connects here immediately after POST /research.
+    It receives JSON messages like:
+      {"type": "log",            "agent": "planner", "message": "..."}
+      {"type": "agent_complete", "agent": "search"}
+      {"type": "complete",       "report": "...", "papers_found": 23}
+      {"type": "error",          "message": "..."}
+    """
+    await websocket.accept()
+    active_connections[session_id] = websocket
+
+    try:
+        # Keep connection alive until pipeline finishes
+        while True:
+            session = sessions.get(session_id)
+
+            if not session:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Session not found"
+                })
+                break
+
+            if session["status"] != "running":
+                break
+
+            # Small wait to avoid busy-polling
+            await asyncio.sleep(0.3)
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        active_connections.pop(session_id, None)
+
+
+# ── Background pipeline runner ────────────────────────────────────────────────
+
+async def _run_pipeline(session_id: str, initial_state: dict):
+    """
+    Runs the LangGraph pipeline and streams updates via WebSocket.
+
+    LangGraph's .stream() is synchronous (blocking), so we run it in
+    a thread pool executor to avoid blocking FastAPI's event loop.
+    The updates are sent back to the async WebSocket via asyncio.
+    """
+    loop = asyncio.get_event_loop()
+
+    try:
+        final_state = dict(initial_state)
+
+        # Run the synchronous LangGraph stream in a thread
+        # This is the correct way to run blocking code in async FastAPI
+        def run_graph():
+            steps = []
+            for step in research_graph.stream(initial_state):
+                steps.append(step)
+            return steps
+
+        steps = await loop.run_in_executor(executor, run_graph)
+
+        # Process each step and send WebSocket updates
+        for step in steps:
+            for agent_name, node_state in step.items():
+                final_state.update(node_state)
+
+                # Send each log line as a separate WebSocket message
+                for log in node_state.get("agent_logs", []):
+                    await send_update(session_id, {
+                        "type":    "log",
+                        "agent":   agent_name,
+                        "message": log
+                    })
+                    await asyncio.sleep(0.05)
+
+                # Notify frontend this agent finished
+                await send_update(session_id, {
+                    "type":  "agent_complete",
+                    "agent": agent_name
+                })
+
+        # Store final state
+        sessions[session_id] = {"status": "complete", "state": final_state}
+
+        # Send the final completion event with the report
+        await send_update(session_id, {
+            "type":         "complete",
+            "report":       final_state.get("final_report", ""),
+            "papers_found": len(final_state.get("raw_papers", [])),
+            "contradictions": final_state.get("contradictions", []),
+            "gaps":         final_state.get("gaps", [])
+        })
+
+    except Exception as e:
+        sessions[session_id] = {
+            "status": "error",
+            "state": {**initial_state, "error": str(e), "status": "error"}
+        }
+        await send_update(session_id, {
+            "type":    "error",
+            "message": f"Pipeline error: {str(e)}"
+        })
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
