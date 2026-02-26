@@ -73,6 +73,8 @@ export default function App() {
     ws.onmessage = (evt) => {
       const msg = JSON.parse(evt.data)
 
+      if (data.type === 'ping') return;
+
       if (msg.type === "log") {
         const entry = { agent: msg.agent, text: msg.message, ts: Date.now() }
         setLogs(prev => [...prev, entry])
