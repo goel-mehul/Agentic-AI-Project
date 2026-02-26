@@ -1,0 +1,52 @@
+{
+  "question": "How do diffusion models generate images?",
+  "timestamp": "2026-02-26T02:56:32.343957",
+  "overall_score": 1.0,
+  "overall_grade": "A",
+  "passed": 5,
+  "total": 5,
+  "papers_found": 35,
+  "iterations": 2,
+  "metrics": [
+    {
+      "name": "report_completeness",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.75,
+      "details": "4/4 sections present."
+    },
+    {
+      "name": "citation_presence",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.5,
+      "details": "36 citation patterns, 0 title mentions found."
+    },
+    {
+      "name": "question_coverage",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.6,
+      "details": "4/4 question keywords found in report."
+    },
+    {
+      "name": "evidence_grounding",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.4,
+      "details": "Report grounded in 8/8 retrieved sources."
+    },
+    {
+      "name": "critic_quality",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.5,
+      "details": "6 gaps identified \u2713 | Quality scores for 8 papers \u2713 | 2 contradiction(s) found \u2713"
+    }
+  ]
+}
