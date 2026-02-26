@@ -4,7 +4,7 @@ An autonomous AI research pipeline that takes a research question and produces a
 
 **Live demo:** [agentic-ai-project-mehul-goel.vercel.app](https://agentic-ai-project-mehul-goel.vercel.app)
 
-Built to demonstrate genuine understanding of agentic AI system design: multi-agent orchestration, RAG pipelines, real-time streaming, and full-stack deployment.
+Built to demonstrate genuine understanding of agentic AI system design: multi-agent orchestration, iterative retrieval loops, RAG pipelines, real-time streaming, and full-stack deployment.
 
 ---
 
@@ -20,18 +20,19 @@ And it will:
 
 1. **Plan** a targeted search strategy with 4-6 academic search queries
 2. **Search** arXiv and Semantic Scholar for relevant papers (no API keys needed)
-3. **Evaluate** the evidence — scoring quality, finding contradictions, identifying gaps
-4. **Write** a structured research report with inline citations
-5. **Fact-check** every claim against the source evidence
-6. **Deliver** a verified, confidence-rated report with a PDF download option
+3. **Evaluate** the evidence — scoring quality (weighted by citation count), finding contradictions, identifying gaps
+4. **Loop back** to Search with gap-targeted queries if critical gaps are found (up to 3 passes)
+5. **Write** a structured research report with inline citations
+6. **Fact-check** every claim against the source evidence
+7. **Deliver** a verified, confidence-rated report with a PDF download option
 
-All five steps happen automatically, in sequence, in about 2-3 minutes.
+All steps happen automatically, in 2-4 minutes depending on how many retrieval passes are needed.
 
 ---
 
 ## Architecture
 
-The system is a **LangGraph StateGraph** — five specialized AI agents connected by directed edges, each reading from and writing to a shared `ResearchState` object.
+The system is a **LangGraph StateGraph** — five specialized AI agents connected by directed edges, including a **conditional loop** that routes back to Search when the Critic identifies critical gaps in the evidence.
 
 ```
 User Question
@@ -42,16 +43,23 @@ User Question
 └──────┬──────┘
        │
        ▼
-┌─────────────┐
-│   Search    │  Fetches papers from arXiv + Semantic Scholar
-│             │  Stores in ChromaDB → retrieves top-8 by semantic similarity
+┌─────────────┐  ◄─────────────────────────────────┐
+│   Search    │  Fetches papers from arXiv +        │
+│             │  Semantic Scholar (with citation    │
+│             │  counts). Stores in ChromaDB →      │
+│             │  retrieves top-8 by semantic        │
+│             │  similarity. On loop passes, uses   │
+│             │  gap-targeted queries instead.      │
+└──────┬──────┘                                     │
+       │                                            │ Loop back if
+       ▼                                            │ gaps ≥ 2 and
+┌─────────────┐                                     │ iterations < 3
+│   Critic    │  Scores evidence quality (boosting  │
+│             │  highly-cited papers), flags        │
+│             │  contradictions, identifies gaps,   │
+│             │  generates gap-filling queries ─────┘
 └──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Critic    │  Scores evidence quality, flags contradictions, notes gaps
-└──────┬──────┘
-       │
+       │  (proceed when gaps < 2, or max passes reached)
        ▼
 ┌─────────────┐
 │   Writer    │  Synthesizes structured markdown report with citations (Sonnet)
@@ -68,20 +76,25 @@ User Question
 
 Each agent has one job, one system prompt, and writes to its own fields in a shared `ResearchState` object. No agent knows what the others do internally.
 
-
 ### Key Design Decisions
+
+**Why the iterative retrieval loop?**
+The Critic identifies specific gaps in the evidence after each search pass. Instead of just flagging them, the pipeline routes back to the Search agent with new queries targeting those exact gaps. LangGraph's conditional edges make this a clean architectural decision — `should_search_again()` checks iteration count, gap count, and paper count to decide whether to loop or proceed. This is what makes the system genuinely agentic rather than a linear script.
+
+**Why citation-weighted scoring?**
+Semantic Scholar returns citation counts for free. A paper cited 400 times has been validated by the community over years — that's a meaningful quality signal. The Critic uses citation counts as a secondary quality score alongside content relevance, giving established literature appropriate weight without ignoring newer work.
 
 **Why 5 separate agents instead of 1?**
 Each agent has a single, well-defined job. This makes each one independently testable, replaceable, and improvable. The Critic can be made more rigorous without touching the Writer. The Search agent can be swapped for a different data source without affecting anything else.
 
 **Why LangGraph?**
-LangGraph manages state passing between agents, supports streaming (so the frontend gets real-time updates), and makes it trivial to add conditional loops later (e.g., looping back to Search if the Critic finds too many gaps).
+LangGraph manages state passing between agents, supports streaming (so the frontend gets real-time updates), and makes conditional routing between agents a first-class feature. The iterative retrieval loop is implemented as a single conditional edge — 10 lines of code for a significant architectural capability.
 
 **Why ChromaDB?**
-Instead of feeding all 20+ retrieved papers to the Writer (expensive, noisy), ChromaDB converts each abstract into a vector embedding and retrieves only the most semantically relevant chunks. This is the RAG (Retrieval-Augmented Generation) pattern used in production AI systems.
+Instead of feeding all 20-40 retrieved papers to the Writer (expensive, noisy), ChromaDB converts each abstract into a vector embedding and retrieves only the most semantically relevant chunks. This is the RAG (Retrieval-Augmented Generation) pattern used in production AI systems.
 
 **Why two different Claude models?**
-The Planner, Search, Critic, and Fact Checker use Claude Haiku (fast, cheap) because their tasks are structured and mechanical. The Writer uses Claude Sonnet (higher quality) because synthesis quality directly affects the output the user sees. This is a deliberate cost/quality tradeoff.
+The Planner, Critic, and Fact Checker use Claude Haiku (fast, cheap) because their tasks are structured and mechanical. The Writer uses Claude Sonnet (higher quality) because synthesis quality directly affects the output the user sees. This is a deliberate cost/quality tradeoff — roughly 10x cost difference between the models.
 
 **Why does the Fact Checker exist?**
 Writers (human and AI) tend to smooth over uncertainty. Having a separate agent verify the Writer's claims against source evidence catches overstatements and adds a confidence rating. This "agent checking agent" pattern is fundamental to building reliable agentic systems.
@@ -98,7 +111,7 @@ Writers (human and AI) tend to smooth over uncertainty. Having a separate agent 
 | Vector Store | ChromaDB |
 | Backend API | FastAPI + WebSockets |
 | Frontend | React + Vite |
-| Testing | pytest |
+| Testing | pytest (44 tests) |
 | Backend Hosting | Railway |
 | Frontend Hosting | Vercel |
 
@@ -113,29 +126,34 @@ research-agent/
 │   │   ├── state.py          # Shared ResearchState TypedDict
 │   │   ├── planner.py        # Agent 1 — query decomposition
 │   │   ├── search.py         # Agent 2 — arXiv + Semantic Scholar + ChromaDB RAG
-│   │   ├── critic.py         # Agent 3 — evidence quality evaluation
+│   │   │                     #           handles first pass and gap-filling passes
+│   │   ├── critic.py         # Agent 3 — evidence quality + citation weighting
+│   │   │                     #           generates gap_queries for retrieval loop
 │   │   ├── writer.py         # Agent 4 — report synthesis (Sonnet)
 │   │   ├── fact_checker.py   # Agent 5 — claim verification + confidence rating
-│   │   └── pipeline.py       # LangGraph StateGraph definition
+│   │   └── pipeline.py       # LangGraph StateGraph with conditional retrieval loop
 │   └── main.py               # FastAPI + WebSocket streaming server
 ├── frontend/
 │   └── src/
-│       ├── App.jsx           # React app — landing, workspace, live agent feed
+│       ├── App.jsx           # React app — shows search passes, gap-filling badge
 │       ├── agents.js         # Agent metadata (single source of truth)
 │       └── components.css    # All styles
-├── evals/                    # pytest suites for every layer
+├── evals/
 │   ├── test_planner.py
 │   ├── test_search.py
 │   ├── test_critic.py
 │   ├── test_writer.py
 │   ├── test_fact_checker.py
 │   ├── test_pipeline.py
-│   └── test_api.py
+│   ├── test_api.py
+│   ├── eval_output_quality.py   # 5-metric quantitative evaluation script
+│   ├── benchmark_vs_gpt.py      # GPT-4o comparison benchmark
+│   └── results/                 # Saved evaluation JSON outputs
 └── docs/
     ├── setup.md
     └── project-info/
-        ├── PROJECT_DEEP_DIVE.md   # Full technical documentation
-        └── INTERVIEW_PREP.md      # Project explained for interviews
+        ├── PROJECT_DEEP_DIVE.md
+        └── INTERVIEW_PREP.md
 ```
 
 ---
@@ -146,7 +164,7 @@ research-agent/
 
 ```bash
 # Clone and set up Python environment
-git clone https://github.com/YOUR_USERNAME/research-agent.git
+git clone https://github.com/goel-mehul/Agentic-AI-Project.git
 cd research-agent
 python3 -m venv venv
 source venv/bin/activate
@@ -180,20 +198,6 @@ npm run dev
 
 Interactive docs at `http://localhost:8000/docs`
 
-### Example
-
-```bash
-# Start a research session
-curl -X POST http://localhost:8000/research \
-  -H "Content-Type: application/json" \
-  -d '{"question": "How does retrieval augmented generation reduce hallucinations?"}'
-
-# Response:
-# {"session_id": "abc-123", "status": "running", "message": "..."}
-
-# Connect via WebSocket to receive live updates as each agent completes
-```
-
 ---
 
 ## Tests
@@ -202,13 +206,13 @@ curl -X POST http://localhost:8000/research \
 python -m pytest evals/ -v
 ```
 
-Each agent has unit tests with mock data (fast, no API calls). Search agent tests hit real arXiv. API tests use FastAPI's TestClient. ~40 tests total.
+44 tests across every layer. Each agent has unit tests with mock data (fast, no API calls). Search agent tests hit real arXiv. API tests use FastAPI's TestClient.
 
 ---
 
 ## Evaluation Framework
 
-The project includes a quantitative evaluation suite measuring:
+The project includes a quantitative evaluation suite that scores any completed report on 5 metrics:
 
 | Metric | What It Checks | Threshold |
 |--------|----------------|-----------|
@@ -218,41 +222,54 @@ The project includes a quantitative evaluation suite measuring:
 | Evidence Grounding | Content grounded in retrieved papers | ≥ 40% |
 | Critic Quality | Depth of gap and contradiction analysis | ≥ 50% |
 
+Run on any question:
+```bash
+cd backend
+python ../evals/eval_output_quality.py \
+  --question "How does RLHF work?" \
+  --save ../evals/results/rlhf.json
+```
+
+### GPT-4o Benchmark
+
+The same 5 metrics can be run against a GPT-4o one-shot response for comparison:
+
+```bash
+python ../evals/benchmark_vs_gpt.py \
+  --question "How does RLHF work?" \
+  --save ../evals/results/benchmark_rlhf.json
+```
+
+Our pipeline scores higher on citation presence and evidence grounding (retrieves real papers with verifiable citations). GPT-4o scores comparably on question coverage (broader parametric knowledge). The benchmark is honest about what each approach is good at.
+
 ---
 
 ## Cost
 
-Using Claude Haiku for 4 agents and Sonnet for the Writer:
+Using Claude Haiku for most agents and Sonnet only for the Writer:
 
 | Usage | Estimated Cost |
 |-------|----------------|
-| Per research run | ~$0.03 – $0.10 |
-| 100 research runs | ~$3 – $10 |
-| Full development | ~$5 – $15 total |
-
----
-
-## Planned Improvements
-
-- **Iterative refinement loop** — conditional edge after Critic that loops back to Search when critical gaps are identified
-- **Full PDF parsing** — retrieve full paper text, not just abstracts
-- **Parallel search** — run arXiv queries concurrently with `asyncio.gather`
-- **Persistent storage** — replace in-memory session store with Redis
-- **Export formats** — DOCX export in addition to PDF
+| Per research run (1 search pass) | ~$0.03 – $0.06 |
+| Per research run (3 search passes) | ~$0.08 – $0.15 |
+| 100 research runs | ~$5 – $15 |
+| Full development | ~$10 – $20 total |
 
 ---
 
 ## What I Learned Building This
 
-This project was built incrementally over 10 steps, each committed separately, to demonstrate genuine development process rather than a single code dump.
+Built incrementally over multiple development phases, each committed separately, to demonstrate genuine development process rather than a single code dump (~90 commits total).
 
 Key concepts practiced:
 - **Agentic AI design** — decomposing complex tasks into specialized agents with single responsibilities
-- **LangGraph orchestration** — StateGraph, node functions, reducers, streaming
+- **Conditional routing** — LangGraph conditional edges for iterative retrieval loops
+- **Citation-weighted evidence** — using external quality signals (citation counts) in LLM prompts
 - **RAG pipelines** — vector embeddings, semantic retrieval, context management
 - **Async Python** — FastAPI, WebSockets, running blocking LangGraph in thread pools
 - **Multi-agent verification** — having agents check each other's work
-- **Evaluation-driven development** — writing quantitative metrics before calling something "working"
+- **Evaluation-driven development** — writing quantitative metrics and benchmarks before calling something "working"
+- **Production deployment** — Railway + Vercel, environment management, handling API rate limits
 
 ---
 
