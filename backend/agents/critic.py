@@ -44,8 +44,9 @@ CRITIC_SYSTEM_PROMPT = """You are a rigorous academic peer reviewer with high st
 Your job: critically evaluate a set of research papers retrieved for a given question.
 
 Output a JSON object with exactly these fields:
-- "quality_scores": dict mapping shortened paper titles to scores 0.0-1.0 with one-line rationale
-  Example: {"Attention Is All You Need (2017)": {"score": 0.95, "rationale": "Seminal, highly cited, directly relevant"}}
+- "quality_scores": ddict mapping paper titles to scores 0.0-1.0 with brief rationale
+  NOTE: Papers with higher citation counts (100+) should receive a quality score boost
+  of up to 0.1, as citation count is a proxy for community validation.
 - "contradictions": list of strings describing conflicting findings between papers (empty list if none)
 - "gaps": list of strings describing important aspects of the question NOT covered by the evidence
 - "high_quality_papers": list of 3-5 paper titles that are most reliable and relevant
@@ -84,12 +85,16 @@ def critic_agent(state: ResearchState) -> ResearchState:
     # ── Format evidence for the critic ───────────────────────────────────
     # We truncate each abstract to 800 chars to stay within token limits.
     # The critic doesn't need the full text — just enough to judge quality.
+    # Get citation counts from state
+
+    citation_counts = state.get("citation_counts", {})
 
     evidence_text = "\n\n---\n\n".join([
         f"Paper: {c['metadata'].get('title', 'Unknown')}\n"
         f"Authors: {c['metadata'].get('authors', 'Unknown')}\n"
         f"Published: {c['metadata'].get('published', 'Unknown')}\n"
         f"Source: {c['metadata'].get('source', 'Unknown')}\n\n"
+        f"Citations: {citation_counts.get(c['metadata'].get('paper_id', ''), 'Unknown')}\n\n"
         f"{c['content'][:800]}"
         for c in chunks[:8]  # Cap at 8 to control token usage
     ])
