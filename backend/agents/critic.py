@@ -112,3 +112,29 @@ def critic_agent(state: ResearchState) -> ResearchState:
     )
 
     # ── Parse response ────────────────────────────────────────────────────
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    raw = raw.strip()
+
+    critique = json.loads(raw)
+
+    # ── Write outputs to state ────────────────────────────────────────────
+    state["evidence_quality"] = critique.get("quality_scores", {})
+    state["contradictions"]   = critique.get("contradictions", [])
+    state["gaps"]             = critique.get("gaps", [])
+
+    n_papers        = len(state["evidence_quality"])
+    n_contradictions = len(state["contradictions"])
+    n_gaps          = len(state["gaps"])
+    summary         = critique.get("summary", "")
+
+    state["agent_logs"] = [
+        f"✅ Critic: Scored {n_papers} papers",
+        f"⚡ Found {n_contradictions} contradiction(s), {n_gaps} gap(s)",
+        f"📊 {summary}"
+    ]
+
+    return state
