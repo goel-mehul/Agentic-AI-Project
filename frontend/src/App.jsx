@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react"
 import ReactMarkdown from "react-markdown"
 import { AGENTS, AGENT_IDS } from "./agents"
 
-const API = "http://localhost:8000"
+const API = "https://agentic-ai-project-production.up.railway.app/"
 
 async function startResearch(question) {
   const res = await fetch(`${API}/research`, {
@@ -67,7 +67,7 @@ export default function App() {
   }
 
   function connectWebSocket(sessionId) {
-    const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`)
+    const ws = new WebSocket(`wss://agentic-ai-project-production.up.railway.app/ws/${sessionId}`)
     wsRef.current = ws
 
     ws.onmessage = (evt) => {
