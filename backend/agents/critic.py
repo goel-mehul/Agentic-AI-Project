@@ -131,15 +131,27 @@ def critic_agent(state: ResearchState) -> ResearchState:
     state["contradictions"]   = critique.get("contradictions", [])
     state["gaps"]             = critique.get("gaps", [])
 
+    # Generate targeted search queries for each gap
+    # These are used if the pipeline loops back to Search
+    gap_queries = []
+    for gap in state["gaps"][:3]:  # Limit to 3 gap queries max
+        # Turn the gap description into a search query
+        # Simple approach: take the first 8 words of the gap description
+        words = gap.replace(",", "").split()[:8]
+        gap_queries.append(" ".join(words))
+
+    state["gap_queries"] = gap_queries
+
     n_papers        = len(state["evidence_quality"])
     n_contradictions = len(state["contradictions"])
     n_gaps          = len(state["gaps"])
     summary         = critique.get("summary", "")
 
     state["agent_logs"] = [
-        f"✅ Critic: Scored {n_papers} papers",
-        f"⚡ Found {n_contradictions} contradiction(s), {n_gaps} gap(s)",
-        f"📊 {summary}"
-    ]
+    f"✅ Critic: Evaluation complete",
+    f"⚡ Found {n_contradictions} contradiction(s), {n_gaps} gap(s)",
+    f"🎯 Generated {len(gap_queries)} gap-filling search queries",
+    f"📊 Summary: {summary}"
+]
 
     return state
