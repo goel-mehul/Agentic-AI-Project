@@ -211,63 +211,67 @@ def _store_and_retrieve(
 # ── Agent Function ────────────────────────────────────────────────────────────
 
 def search_agent(state: ResearchState) -> ResearchState:
-    """
-    Search Agent — second node in the LangGraph pipeline.
-
-    Args:
-        state: ResearchState with research_plan populated by the Planner
-
-    Returns:
-        Updated state with raw_papers and retrieved_chunks populated
-    """
-    queries        = state["research_plan"]
-    question       = state["research_question"]
-    session_id     = state["session_id"]
+    iteration = state.get("search_iteration", 0)
+    gap_queries = state.get("gap_queries", [])
+    question = state["research_question"]
+    session_id = state["session_id"]
 
     state["current_agent"] = "search"
-    state["agent_logs"]    = [f"🔍 Search: Running {len(queries)} queries..."]
 
-    all_papers  = []
-    seen_titles = set()
+    # Decide which queries to run
+    if iteration == 0:
+        # First pass: use the Planner's queries
+        queries = state["research_plan"]
+        state["agent_logs"] = [f"🔍 Search: Pass 1 — running {len(queries)} planned queries..."]
+    else:
+        # Subsequent pass: target gaps found by the Critic
+        queries = gap_queries
+        state["agent_logs"] = [
+            f"🔄 Search: Pass {iteration + 1} — running {len(queries)} gap-filling queries...",
+            f"🎯 Targeting gaps: {', '.join(gap_queries[:3])}"
+        ]
+
+    # Track which papers we already have to avoid duplicates
+    existing_titles = {p.get("title", "").lower() for p in state.get("raw_papers", [])}
+    new_papers = []
 
     for query in queries:
-        state["agent_logs"] = [f"🔍 Search: Querying arXiv — '{query}'"]
-
+        state["agent_logs"] = [f"🔍 Search: Querying for '{query}'"]
         arxiv_papers = _search_arxiv(query, max_results=4)
         ss_papers    = _search_semantic_scholar(query, max_results=2)
 
-        # Deduplicate by title so the same paper from both sources isn't counted twice
         for paper in arxiv_papers + ss_papers:
-            title = paper.get("title", "").lower().strip()
-            if title and title not in seen_titles:
-                seen_titles.add(title)
-                all_papers.append(paper)
+            title = paper.get("title", "").lower()
+            if title and title not in existing_titles:
+                existing_titles.add(title)
+                new_papers.append(paper)
+
+    # Merge with existing papers
+    all_papers = state.get("raw_papers", []) + new_papers
 
     state["raw_papers"] = all_papers
-    # Build citation count lookup — used by the Critic for quality scoring
-    citation_counts = {}
-    for paper in all_papers:
+    state["search_iteration"] = iteration + 1
+
+    # Update citation counts
+    citation_counts = state.get("citation_counts", {})
+    for paper in new_papers:
         pid = paper.get("paper_id", "")
         count = paper.get("citation_count", 0)
         if pid and count:
             citation_counts[pid] = count
-
     state["citation_counts"] = citation_counts
 
-    # Log how many papers have citation data
-    papers_with_citations = sum(1 for p in all_papers if p.get("citation_count", 0) > 0)
     state["agent_logs"] = [
-        f"📚 Search: Collected {len(all_papers)} unique papers",
-        f"📊 Search: Citation data available for {papers_with_citations} papers",
-        "🧮 Search: Indexing papers in vector store and retrieving relevant context..."
+        f"📚 Search: {len(new_papers)} new papers found (total: {len(all_papers)})",
+        "🧮 Search: Re-indexing vector store with new papers..."
     ]
 
-    # Store in vector DB and retrieve most relevant chunks
+    # Re-index everything in ChromaDB and retrieve
     chunks = _store_and_retrieve(all_papers, question, session_id)
     state["retrieved_chunks"] = chunks
 
     state["agent_logs"] = [
-        f"✅ Search: Retrieved {len(chunks)} most relevant paper sections"
+        f"✅ Search: Retrieved {len(chunks)} most relevant sections"
     ]
 
     return state
