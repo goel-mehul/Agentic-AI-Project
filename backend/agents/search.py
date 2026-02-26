@@ -28,6 +28,7 @@ WHAT YOU'RE LEARNING:
 
 import requests
 import chromadb
+import time
 from chromadb.utils import embedding_functions
 from .state import ResearchState
 
@@ -80,9 +81,10 @@ def _search_arxiv(query: str, max_results: int = 5) -> list[dict]:
                 "url": result.pdf_url or result.entry_id,
                 "relevance_score": 1.0
             })
+        time.sleep(3)  # ← add this — respects arXiv's rate limit
     except Exception as e:
         print(f"[Search] arXiv error for '{query}': {e}")
-
+        time.sleep(5)  # ← longer wait after an error before retrying
     return papers
 
 
