@@ -94,6 +94,8 @@ def create_initial_state(research_question: str) -> ResearchState:
         evidence_quality={},
         contradictions=[],
         gaps=[],
+        search_iteration=0,
+        gap_queries=[],
         draft_report="",
         report_sections={},
         final_report="",

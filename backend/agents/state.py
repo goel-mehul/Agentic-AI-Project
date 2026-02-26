@@ -49,6 +49,9 @@ class ResearchState(TypedDict):
     contradictions: list[str]   # Conflicting findings between papers
     gaps: list[str]             # Topics not covered by the evidence
 
+    search_iteration: int           # How many search passes have been done (starts at 0)
+    gap_queries: list[str]          # Search queries generated from Critic's gaps
+
     # ── Writer Agent outputs ─────────────────────────────────────────────
     draft_report: str           # Initial markdown report
     report_sections: dict       # Report broken into named sections
