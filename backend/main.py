@@ -44,7 +44,7 @@ app = FastAPI(
 # Without this, browsers block cross-origin requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://agentic-ai-project-mehul-goel.vercel.app", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
