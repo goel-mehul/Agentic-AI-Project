@@ -4,6 +4,7 @@ import { AGENTS, AGENT_IDS } from "./agents"
 
 const API = "https://agentic-ai-project-production.up.railway.app"
 
+
 async function startResearch(question) {
   const res = await fetch(`${API}/research`, {
     method:  "POST",
@@ -26,6 +27,7 @@ export default function App() {
   const [papersFound, setPapersFound]         = useState(0)
   const [error, setError]                     = useState("")
   const [activeTab, setActiveTab]             = useState("logs") // "logs" | "report"
+  const [searchIteration, setSearchIteration] = useState(0)
   const wsRef     = useRef(null)
   const logEndRef = useRef(null)
 
@@ -56,6 +58,7 @@ export default function App() {
     setError("")
     setPapersFound(0)
     setActiveTab("logs")
+    setSearchIteration(0)
 
     try {
       const { session_id } = await startResearch(question)
@@ -73,18 +76,21 @@ export default function App() {
     ws.onmessage = (evt) => {
       const msg = JSON.parse(evt.data)
 
-      if (data.type === 'ping') return;
+    if (msg.type === "log") {
+      const entry = { agent: msg.agent, text: msg.message, ts: Date.now() }
+      setLogs(prev => [...prev, entry])
+      setAgentLogs(prev => ({
+        ...prev,
+        [msg.agent]: [...(prev[msg.agent] || []), entry]
+      }))
+      setActiveAgent(msg.agent)
 
-      if (msg.type === "log") {
-        const entry = { agent: msg.agent, text: msg.message, ts: Date.now() }
-        setLogs(prev => [...prev, entry])
-        // Also store per-agent
-        setAgentLogs(prev => ({
-          ...prev,
-          [msg.agent]: [...(prev[msg.agent] || []), entry]
-        }))
-        setActiveAgent(msg.agent)
+      // Detect gap-filling loop from log message
+      if (msg.message.includes("Pass 2") || msg.message.includes("Pass 3")) {
+        setSearchIteration(prev => prev + 1)
       }
+    }
+
       if (msg.type === "agent_complete") {
         setCompletedAgents(prev => new Set([...prev, msg.agent]))
       }
@@ -173,6 +179,7 @@ export default function App() {
             error={error}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
+            searchIteration={searchIteration}
           />
         )}
       </main>
@@ -250,7 +257,7 @@ function Workspace({
   activeAgent, selectedAgent, setSelectedAgent,
   selectedAgentData, selectedAgentLogs,
   getAgentState, report, papersFound,
-  error, activeTab, setActiveTab
+  error, activeTab, setActiveTab,searchIteration 
 }) {
   return (
     <div className="workspace">
@@ -298,8 +305,21 @@ function Workspace({
                     <div className="agent-row-name">
                       <span className="agent-row-icon">{agent.icon}</span>
                       {agent.label}
+                      {agent.id === "search" && searchIteration > 0 && (
+                        <span style={{
+                          marginLeft: "6px",
+                          fontSize: "10px",
+                          background: "#2a4a3a",
+                          color: "#4ade80",
+                          padding: "1px 5px",
+                          borderRadius: "4px"
+                        }}>
+                          ×{searchIteration + 1} passes
+                        </span>
+                      )}
                     </div>
-                    <div className="agent-row-desc">{agent.desc}</div>
+                      <div className="agent-row-desc">{agent.desc}
+                      </div>
                   </div>
 
                   {/* Click hint */}
@@ -315,22 +335,27 @@ function Workspace({
         </div>
 
         {status === "complete" && (
-          <div className="stats-row">
-            <div className="stat-item">
-              <div className="stat-value">{papersFound}</div>
-              <div className="stat-label">Papers</div>
-            </div>
-            <div className="stat-divider" />
-            <div className="stat-item">
-              <div className="stat-value">5</div>
-              <div className="stat-label">Agents</div>
-            </div>
-            <div className="stat-divider" />
-            <div className="stat-item">
-              <div className="stat-value">1</div>
-              <div className="stat-label">Report</div>
-            </div>
+        <div className="stats-row">
+          <div className="stat-item">
+            <div className="stat-value">{papersFound}</div>
+            <div className="stat-label">Papers</div>
           </div>
+          <div className="stat-divider" />
+          <div className="stat-item">
+            <div className="stat-value">5</div>
+            <div className="stat-label">Agents</div>
+          </div>
+          <div className="stat-divider" />
+          <div className="stat-item">
+            <div className="stat-value">{searchIteration > 0 ? searchIteration + 1 : 1}</div>
+            <div className="stat-label">Searches</div>
+          </div>
+          <div className="stat-divider" />
+          <div className="stat-item">
+            <div className="stat-value">1</div>
+            <div className="stat-label">Report</div>
+          </div>
+        </div>
         )}
       </aside>
 
