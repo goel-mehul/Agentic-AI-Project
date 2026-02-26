@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react"
 import ReactMarkdown from "react-markdown"
 import { AGENTS, AGENT_IDS } from "./agents"
 
-const API = "https://agentic-ai-project-production.up.railway.app/"
+const API = "https://agentic-ai-project-production.up.railway.app"
 
 async function startResearch(question) {
   const res = await fetch(`${API}/research`, {
