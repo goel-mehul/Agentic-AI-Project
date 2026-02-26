@@ -4,8 +4,6 @@ import { AGENTS, AGENT_IDS } from "./agents"
 
 const API = "http://localhost:8000"
 
-// ── API helpers ──────────────────────────────────────────────────────────────
-
 async function startResearch(question) {
   const res = await fetch(`${API}/research`, {
     method:  "POST",
@@ -16,27 +14,33 @@ async function startResearch(question) {
   return res.json()
 }
 
-// ── Main App ─────────────────────────────────────────────────────────────────
-
 export default function App() {
   const [question, setQuestion]               = useState("")
   const [status, setStatus]                   = useState("idle")
   const [logs, setLogs]                       = useState([])
+  const [agentLogs, setAgentLogs]             = useState({})   // per-agent logs
   const [activeAgent, setActiveAgent]         = useState(null)
+  const [selectedAgent, setSelectedAgent]     = useState(null) // clicked agent
   const [completedAgents, setCompletedAgents] = useState(new Set())
   const [report, setReport]                   = useState(null)
   const [papersFound, setPapersFound]         = useState(0)
   const [error, setError]                     = useState("")
-  const wsRef    = useRef(null)
+  const [activeTab, setActiveTab]             = useState("logs") // "logs" | "report"
+  const wsRef     = useRef(null)
   const logEndRef = useRef(null)
 
-  // Auto-scroll logs to bottom
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [logs])
+    if (activeTab === "logs") {
+      logEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [logs, activeTab])
 
-  // Cleanup WebSocket on unmount
   useEffect(() => () => wsRef.current?.close(), [])
+
+  // When report arrives, auto-switch to report tab
+  useEffect(() => {
+    if (report) setActiveTab("report")
+  }, [report])
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -44,11 +48,14 @@ export default function App() {
 
     setStatus("running")
     setLogs([])
+    setAgentLogs({})
     setReport(null)
     setActiveAgent(null)
+    setSelectedAgent(null)
     setCompletedAgents(new Set())
     setError("")
     setPapersFound(0)
+    setActiveTab("logs")
 
     try {
       const { session_id } = await startResearch(question)
@@ -67,7 +74,13 @@ export default function App() {
       const msg = JSON.parse(evt.data)
 
       if (msg.type === "log") {
-        setLogs(prev => [...prev, { agent: msg.agent, text: msg.message }])
+        const entry = { agent: msg.agent, text: msg.message, ts: Date.now() }
+        setLogs(prev => [...prev, entry])
+        // Also store per-agent
+        setAgentLogs(prev => ({
+          ...prev,
+          [msg.agent]: [...(prev[msg.agent] || []), entry]
+        }))
         setActiveAgent(msg.agent)
       }
       if (msg.type === "agent_complete") {
@@ -97,8 +110,10 @@ export default function App() {
     setStatus("idle")
     setQuestion("")
     setLogs([])
+    setAgentLogs({})
     setReport(null)
     setActiveAgent(null)
+    setSelectedAgent(null)
     setCompletedAgents(new Set())
     setError("")
   }
@@ -109,48 +124,53 @@ export default function App() {
     return "idle"
   }
 
+  // What to show in the right panel when an agent is selected
+  const selectedAgentData = selectedAgent
+    ? AGENTS.find(a => a.id === selectedAgent)
+    : null
+  const selectedAgentLogs = selectedAgent
+    ? (agentLogs[selectedAgent] || [])
+    : []
+
   return (
     <div className="app">
-
-      {/* ── Header ── */}
       <header className="header">
         <div className="header-inner">
           <div className="logo">
-            <span className="logo-icon">⬡</span>
-            <span className="logo-text">Research Scientist</span>
-            <span className="logo-badge">5-Agent Pipeline</span>
+            <div className="logo-hex">⬡</div>
+            <div>
+              <div className="logo-title">Research Scientist</div>
+              <div className="logo-sub">Multi-Agent AI Pipeline</div>
+            </div>
           </div>
           {status !== "idle" && (
-            <button className="btn-ghost" onClick={reset}>
-              ← New Research
+            <button className="btn-new" onClick={reset}>
+              + New Research
             </button>
           )}
         </div>
       </header>
 
       <main className="main">
-
-        {/* ── Landing ── */}
-        {status === "idle" && (
-          <Landing
-            question={question}
-            setQuestion={setQuestion}
-            onSubmit={handleSubmit}
-          />
-        )}
-
-        {/* ── Running / Complete ── */}
-        {status !== "idle" && (
+        {status === "idle" ? (
+          <Landing question={question} setQuestion={setQuestion} onSubmit={handleSubmit} />
+        ) : (
           <Workspace
             question={question}
             status={status}
             logs={logs}
             logEndRef={logEndRef}
             activeAgent={activeAgent}
+            selectedAgent={selectedAgent}
+            setSelectedAgent={setSelectedAgent}
+            selectedAgentData={selectedAgentData}
+            selectedAgentLogs={selectedAgentLogs}
             getAgentState={getAgentState}
             report={report}
             papersFound={papersFound}
             error={error}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
           />
         )}
       </main>
@@ -158,28 +178,33 @@ export default function App() {
   )
 }
 
-// ── Landing Component ─────────────────────────────────────────────────────────
+// ── Landing ───────────────────────────────────────────────────────────────────
 
 function Landing({ question, setQuestion, onSubmit }) {
   return (
     <div className="landing">
-      <div className="landing-headline">
-        <h1>Five AI agents.<br />One research report.</h1>
-        <p className="subhead">
-          Ask a research question. A pipeline of specialized agents searches
-          arXiv, evaluates evidence, and synthesizes a verified report —
-          automatically.
+      <div className="landing-hero">
+        <div className="hero-tag">Agentic AI Research Tool</div>
+        <h1 className="hero-title">
+          Ask a question.<br />
+          <span className="hero-accent">Five agents find the answer.</span>
+        </h1>
+        <p className="hero-sub">
+          A pipeline of specialized AI agents searches academic databases,
+          evaluates evidence quality, and synthesizes a verified research
+          report — all automatically.
         </p>
       </div>
 
       <form className="query-form" onSubmit={onSubmit}>
+        <label className="query-label">Your research question</label>
         <div className="query-box">
           <textarea
             className="query-input"
             value={question}
             onChange={e => setQuestion(e.target.value)}
             placeholder="e.g. What are the most effective techniques for reducing hallucinations in large language models?"
-            rows={3}
+            rows={4}
             onKeyDown={e => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault()
@@ -187,102 +212,192 @@ function Landing({ question, setQuestion, onSubmit }) {
               }
             }}
           />
-          <button
-            className="btn-primary"
-            type="submit"
-            disabled={!question.trim()}
-          >
-            Start Research →
-          </button>
+          <div className="query-footer">
+            <span className="query-hint">Press Enter to submit · Shift+Enter for new line</span>
+            <button className="btn-submit" type="submit" disabled={!question.trim()}>
+              Start Research →
+            </button>
+          </div>
         </div>
       </form>
 
-      <div className="agent-grid">
-        {AGENTS.map((a, i) => (
-          <div className="agent-card" key={a.id}>
-            <span className="agent-num">0{i + 1}</span>
-            <span className="agent-icon">{a.icon}</span>
-            <span className="agent-name">{a.label}</span>
-            <span className="agent-desc">{a.desc}</span>
-          </div>
-        ))}
+      <div className="pipeline-preview">
+        <div className="preview-label">How it works</div>
+        <div className="preview-steps">
+          {AGENTS.map((a, i) => (
+            <div className="preview-step" key={a.id}>
+              <div className="preview-step-num">{String(i+1).padStart(2,"0")}</div>
+              <div className="preview-step-icon">{a.icon}</div>
+              <div className="preview-step-info">
+                <div className="preview-step-name">{a.label}</div>
+                <div className="preview-step-desc">{a.desc}</div>
+              </div>
+              {i < AGENTS.length - 1 && <div className="preview-arrow">→</div>}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
 }
 
-// ── Workspace Component ───────────────────────────────────────────────────────
+// ── Workspace ─────────────────────────────────────────────────────────────────
 
 function Workspace({
   question, status, logs, logEndRef,
-  activeAgent, getAgentState,
-  report, papersFound, error
+  activeAgent, selectedAgent, setSelectedAgent,
+  selectedAgentData, selectedAgentLogs,
+  getAgentState, report, papersFound,
+  error, activeTab, setActiveTab
 }) {
   return (
     <div className="workspace">
 
-      {/* Left: Pipeline status */}
+      {/* ── Left sidebar: Agent pipeline ── */}
       <aside className="sidebar">
-        <p className="sidebar-label">Pipeline</p>
-        <div className="question-chip">{question}</div>
+        <div className="sidebar-section">
+          <div className="sidebar-section-label">Research Question</div>
+          <div className="question-display">{question}</div>
+        </div>
 
-        <div className="pipeline">
-          {AGENTS.map((a, i) => {
-            const state = getAgentState(a.id)
-            return (
-              <div className={`pipeline-step step-${state}`} key={a.id}>
-                {i > 0 && <div className="step-line" />}
-                <div className="step-dot">
-                  {state === "done"   && <span className="dot-check">✓</span>}
-                  {state === "active" && <span className="dot-pulse" />}
-                  {state === "idle"   && <span className="dot-idle" />}
+        <div className="sidebar-section">
+          <div className="sidebar-section-label">
+            Agent Pipeline
+            {status === "running" && <span className="running-badge">Running</span>}
+            {status === "complete" && <span className="done-badge">Complete</span>}
+          </div>
+
+          <div className="agent-list">
+            {AGENTS.map((agent, i) => {
+              const state    = getAgentState(agent.id)
+              const isSelected = selectedAgent === agent.id
+              const isClickable = state === "done" || state === "active"
+
+              return (
+                <div
+                  key={agent.id}
+                  className={`agent-row agent-${state} ${isSelected ? "agent-selected" : ""} ${isClickable ? "agent-clickable" : ""}`}
+                  onClick={() => isClickable && setSelectedAgent(
+                    isSelected ? null : agent.id
+                  )}
+                >
+                  {/* Connector line */}
+                  {i > 0 && <div className={`connector connector-${state}`} />}
+
+                  {/* Status dot */}
+                  <div className={`agent-dot dot-${state}`}>
+                    {state === "done"   && <span className="dot-icon">✓</span>}
+                    {state === "active" && <span className="dot-spinner" />}
+                    {state === "idle"   && <span className="dot-empty" />}
+                  </div>
+
+                  {/* Agent info */}
+                  <div className="agent-info">
+                    <div className="agent-row-name">
+                      <span className="agent-row-icon">{agent.icon}</span>
+                      {agent.label}
+                    </div>
+                    <div className="agent-row-desc">{agent.desc}</div>
+                  </div>
+
+                  {/* Click hint */}
+                  {isClickable && (
+                    <div className="agent-view-hint">
+                      {isSelected ? "↑" : "→"}
+                    </div>
+                  )}
                 </div>
-                <div className="step-text">
-                  <div className="step-name">{a.icon} {a.label}</div>
-                  <div className="step-desc">{a.desc}</div>
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
 
         {status === "complete" && (
-          <div className="stats">
-            <div className="stat">
-              <span className="stat-n">{papersFound}</span>
-              <span className="stat-l">Papers</span>
+          <div className="stats-row">
+            <div className="stat-item">
+              <div className="stat-value">{papersFound}</div>
+              <div className="stat-label">Papers</div>
             </div>
-            <div className="stat">
-              <span className="stat-n">5</span>
-              <span className="stat-l">Agents</span>
+            <div className="stat-divider" />
+            <div className="stat-item">
+              <div className="stat-value">5</div>
+              <div className="stat-label">Agents</div>
+            </div>
+            <div className="stat-divider" />
+            <div className="stat-item">
+              <div className="stat-value">1</div>
+              <div className="stat-label">Report</div>
             </div>
           </div>
         )}
       </aside>
 
-      {/* Right: Logs + Report */}
-      <div className="content">
+      {/* ── Right panel ── */}
+      <div className="right-panel">
 
-        {/* Live logs */}
-        {logs.length > 0 && (
-          <div className="log-panel">
-            <div className="panel-header">
-              Agent Activity
-              {status === "running" && (
-                <span className="live-dot">● LIVE</span>
+        {/* Agent detail view — shown when an agent is clicked */}
+        {selectedAgent && (
+          <div className="agent-detail">
+            <div className="agent-detail-header">
+              <div className="agent-detail-title">
+                <span className="agent-detail-icon">{selectedAgentData?.icon}</span>
+                {selectedAgentData?.label} Agent — Output
+              </div>
+              <button className="btn-close" onClick={() => setSelectedAgent(null)}>✕</button>
+            </div>
+            <div className="agent-detail-body">
+              {selectedAgentLogs.length === 0 ? (
+                <div className="detail-empty">No logs captured for this agent yet.</div>
+              ) : (
+                selectedAgentLogs.map((log, i) => (
+                  <div className="detail-log-row" key={i}>
+                    <span className="detail-log-text">{log.text}</span>
+                  </div>
+                ))
               )}
             </div>
-            <div className="log-feed">
+          </div>
+        )}
+
+        {/* Tab bar */}
+        <div className="tab-bar">
+          <button
+            className={`tab ${activeTab === "logs" ? "tab-active" : ""}`}
+            onClick={() => setActiveTab("logs")}
+          >
+            Agent Activity
+            {status === "running" && <span className="tab-live">● LIVE</span>}
+          </button>
+          <button
+            className={`tab ${activeTab === "report" ? "tab-active" : ""}`}
+            onClick={() => setActiveTab("report")}
+            disabled={!report}
+          >
+            Research Report
+            {report && <span className="tab-ready">Ready</span>}
+          </button>
+        </div>
+
+        {/* Logs tab */}
+        {activeTab === "logs" && (
+          <div className="logs-panel">
+            {logs.length === 0 && status === "running" && (
+              <div className="logs-starting">
+                <div className="spinner" />
+                Starting pipeline...
+              </div>
+            )}
+            <div className="logs-feed">
               {logs.map((log, i) => (
-                <div className="log-row" key={i}>
-                  <span className="log-agent">{log.agent}</span>
-                  <span className="log-text">{log.text}</span>
+                <div className="log-entry" key={i}>
+                  <span className="log-agent-tag">{log.agent}</span>
+                  <span className="log-message">{log.text}</span>
                 </div>
               ))}
-              {status === "running" && (
-                <div className="log-row">
-                  <span className="log-agent">{activeAgent}</span>
-                  <span className="thinking">
+              {status === "running" && logs.length > 0 && (
+                <div className="log-entry log-thinking">
+                  <span className="log-agent-tag">{activeAgent}</span>
+                  <span className="thinking-dots">
                     <span /><span /><span />
                   </span>
                 </div>
@@ -292,25 +407,25 @@ function Workspace({
           </div>
         )}
 
-        {/* Error */}
-        {status === "error" && (
-          <div className="error-box">
-            <div className="error-title">Pipeline Error</div>
-            <div className="error-msg">{error}</div>
-            <div className="error-hint">
-              Make sure the backend is running:{" "}
-              <code>uvicorn main:app --reload</code>
-            </div>
-          </div>
-        )}
-
-        {/* Final report */}
-        {status === "complete" && report && (
+        {/* Report tab */}
+        {activeTab === "report" && (
           <div className="report-panel">
-            <div className="panel-header">Research Report</div>
-            <div className="report-body">
-              <ReactMarkdown>{report}</ReactMarkdown>
-            </div>
+            {error && (
+              <div className="error-banner">
+                <strong>Pipeline Error:</strong> {error}
+                <div className="error-hint">Make sure backend is running: <code>uvicorn main:app --reload</code></div>
+              </div>
+            )}
+            {report ? (
+              <div className="report-content">
+                <ReactMarkdown>{report}</ReactMarkdown>
+              </div>
+            ) : (
+              <div className="report-waiting">
+                <div className="spinner" />
+                Report will appear here when the pipeline completes...
+              </div>
+            )}
           </div>
         )}
       </div>
