@@ -179,8 +179,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     active_connections[session_id] = websocket
 
     try:
+        ping_counter = 0
         while session_id in sessions and sessions[session_id]["status"] == "running":
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
+             ping_counter += 1
+            if ping_counter % 30 == 0:  # ping every 30 seconds
             # Send keepalive ping every 30 seconds to prevent timeout
             try:
                 await websocket.send_json({"type": "ping"})
@@ -202,6 +205,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         pass
     finally:
         active_connections.pop(session_id, None)
+
 
 # ── Background pipeline runner ────────────────────────────────────────────────
 
