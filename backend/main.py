@@ -206,57 +206,75 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
 async def _run_pipeline(session_id: str, initial_state: dict):
     """
-    Runs the LangGraph pipeline and streams updates via WebSocket.
-
-    LangGraph's .stream() is synchronous (blocking), so we run it in
-    a thread pool executor to avoid blocking FastAPI's event loop.
-    The updates are sent back to the async WebSocket via asyncio.
+    Runs the LangGraph pipeline and streams updates via WebSocket
+    as each agent completes — not just at the end.
     """
     loop = asyncio.get_event_loop()
+    final_state = dict(initial_state)
 
     try:
-        final_state = dict(initial_state)
+        # We use a queue to pass results from the thread back to async
+        queue = asyncio.Queue()
 
-        # Run the synchronous LangGraph stream in a thread
-        # This is the correct way to run blocking code in async FastAPI
         def run_graph():
-            steps = []
-            for step in research_graph.stream(initial_state):
-                steps.append(step)
-            return steps
+            """Runs in a thread — puts each step into the queue."""
+            try:
+                for step in research_graph.stream(initial_state):
+                    # Put the step on the queue so the async side can send it
+                    loop.call_soon_threadsafe(queue.put_nowait, ("step", step))
+                # Signal that we're done
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
 
-        steps = await loop.run_in_executor(executor, run_graph)
+        # Start the graph in a background thread
+        import threading
+        thread = threading.Thread(target=run_graph, daemon=True)
+        thread.start()
 
-        # Process each step and send WebSocket updates
-        for step in steps:
-            for agent_name, node_state in step.items():
-                final_state.update(node_state)
+        # Process queue items as they arrive — this is the real-time part
+        while True:
+            msg_type, payload = await queue.get()
 
-                # Send each log line as a separate WebSocket message
-                for log in node_state.get("agent_logs", []):
+            if msg_type == "error":
+                raise Exception(payload)
+
+            if msg_type == "done":
+                break
+
+            if msg_type == "step":
+                # Each step = one agent just finished
+                for agent_name, node_state in payload.items():
+                    final_state.update(node_state)
+
+                    # Send each log line immediately
+                    for log in node_state.get("agent_logs", []):
+                        await send_update(session_id, {
+                            "type":    "log",
+                            "agent":   agent_name,
+                            "message": log
+                        })
+                        await asyncio.sleep(0.05)
+
+                    # Tell frontend this agent is done
                     await send_update(session_id, {
-                        "type":    "log",
-                        "agent":   agent_name,
-                        "message": log
+                        "type":  "agent_complete",
+                        "agent": agent_name
                     })
-                    await asyncio.sleep(0.05)
 
-                # Notify frontend this agent finished
-                await send_update(session_id, {
-                    "type":  "agent_complete",
-                    "agent": agent_name
-                })
+                    # Small pause so the UI can render the update visually
+                    await asyncio.sleep(0.3)
 
         # Store final state
         sessions[session_id] = {"status": "complete", "state": final_state}
 
-        # Send the final completion event with the report
+        # Send the completed report
         await send_update(session_id, {
-            "type":         "complete",
-            "report":       final_state.get("final_report", ""),
-            "papers_found": len(final_state.get("raw_papers", [])),
+            "type":           "complete",
+            "report":         final_state.get("final_report", ""),
+            "papers_found":   len(final_state.get("raw_papers", [])),
             "contradictions": final_state.get("contradictions", []),
-            "gaps":         final_state.get("gaps", [])
+            "gaps":           final_state.get("gaps", [])
         })
 
     except Exception as e:
@@ -268,7 +286,6 @@ async def _run_pipeline(session_id: str, initial_state: dict):
             "type":    "error",
             "message": f"Pipeline error: {str(e)}"
         })
-
 
 if __name__ == "__main__":
     import uvicorn
