@@ -2,15 +2,19 @@
 
 An autonomous AI research pipeline that takes a research question and produces a verified, cited research report — without any human involvement between input and output.
 
-Built as a portfolio project demonstrating **agentic AI system design**, multi-agent orchestration, RAG pipelines, and real-time streaming interfaces.
+**Live demo:** [agentic-ai-project-mehul-goel.vercel.app](https://agentic-ai-project-mehul-goel.vercel.app)
+
+Built to demonstrate genuine understanding of agentic AI system design: multi-agent orchestration, RAG pipelines, real-time streaming, and full-stack deployment.
 
 ---
 
 ## What It Does
 
-Ask it a research question like:
+Submit a research question. Five specialized AI agents handle everything else.
 
-> *"What are the most effective techniques for reducing hallucinations in large language models?"*
+```
+"What are the most effective techniques for reducing hallucinations in LLMs?"
+```
 
 And it will:
 
@@ -34,12 +38,13 @@ User Question
       │
       ▼
 ┌─────────────┐
-│   Planner   │  Breaks question into focused search queries
+│   Planner   │  Turns your question into 4-6 optimized academic search queries
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│   Search    │  Fetches papers → stores in ChromaDB → retrieves top-k chunks
+│   Search    │  Fetches papers from arXiv + Semantic Scholar
+│             │  Stores in ChromaDB → retrieves top-8 by semantic similarity
 └──────┬──────┘
        │
        ▼
@@ -49,17 +54,20 @@ User Question
        │
        ▼
 ┌─────────────┐
-│   Writer    │  Synthesizes structured markdown report with citations
+│   Writer    │  Synthesizes structured markdown report with citations (Sonnet)
 └──────┬──────┘
        │
        ▼
 ┌─────────────────┐
-│  Fact Checker   │  Verifies claims vs. sources, adds confidence rating
+│  Fact Checker   │  Verifies every claim · adds confidence rating · corrects overstatements
 └─────────────────┘
        │
        ▼
   Final Report
 ```
+
+Each agent has one job, one system prompt, and writes to its own fields in a shared `ResearchState` object. No agent knows what the others do internally.
+
 
 ### Key Design Decisions
 
@@ -87,10 +95,12 @@ Writers (human and AI) tend to smooth over uncertainty. Having a separate agent 
 | Agent Orchestration | LangGraph |
 | LLM | Anthropic Claude (Haiku + Sonnet) |
 | Paper Retrieval | arXiv API, Semantic Scholar API |
-| Vector Store | ChromaDB (local) |
+| Vector Store | ChromaDB |
 | Backend API | FastAPI + WebSockets |
 | Frontend | React + Vite |
 | Testing | pytest |
+| Backend Hosting | Railway |
+| Frontend Hosting | Vercel |
 
 ---
 
@@ -101,26 +111,20 @@ research-agent/
 ├── backend/
 │   ├── agents/
 │   │   ├── state.py          # Shared ResearchState TypedDict
-│   │   ├── planner.py        # Agent 1: Decomposes research question
-│   │   ├── search.py         # Agent 2: arXiv + Semantic Scholar + ChromaDB
-│   │   ├── critic.py         # Agent 3: Evidence quality evaluation
-│   │   ├── writer.py         # Agent 4: Report synthesis (uses Sonnet)
-│   │   ├── fact_checker.py   # Agent 5: Claim verification
+│   │   ├── planner.py        # Agent 1 — query decomposition
+│   │   ├── search.py         # Agent 2 — arXiv + Semantic Scholar + ChromaDB RAG
+│   │   ├── critic.py         # Agent 3 — evidence quality evaluation
+│   │   ├── writer.py         # Agent 4 — report synthesis (Sonnet)
+│   │   ├── fact_checker.py   # Agent 5 — claim verification + confidence rating
 │   │   └── pipeline.py       # LangGraph StateGraph definition
-│   ├── main.py               # FastAPI + WebSocket streaming server
-│   ├── test_planner.py       # Manual test scripts
-│   ├── test_search.py
-│   ├── test_critic.py
-│   ├── test_writer.py
-│   └── test_fact_checker.py
+│   └── main.py               # FastAPI + WebSocket streaming server
 ├── frontend/
 │   └── src/
-│       ├── App.jsx           # Main React component
-│       ├── agents.js         # Agent metadata
-│       ├── components.css    # All styles
-│       └── main.jsx          # Entry point
-├── evals/
-│   ├── test_planner.py       # Automated pytest suites
+│       ├── App.jsx           # React app — landing, workspace, live agent feed
+│       ├── agents.js         # Agent metadata (single source of truth)
+│       └── components.css    # All styles
+├── evals/                    # pytest suites for every layer
+│   ├── test_planner.py
 │   ├── test_search.py
 │   ├── test_critic.py
 │   ├── test_writer.py
@@ -128,60 +132,39 @@ research-agent/
 │   ├── test_pipeline.py
 │   └── test_api.py
 └── docs/
-    └── setup.md
+    ├── setup.md
+    └── project-info/
+        ├── PROJECT_DEEP_DIVE.md   # Full technical documentation
+        └── INTERVIEW_PREP.md      # Project explained for interviews
 ```
 
 ---
 
-## Setup & Running
+## Running Locally
 
-### Prerequisites
-- Python 3.11+
-- Node.js 18+
-- Anthropic API key ([console.anthropic.com](https://console.anthropic.com))
-
-### 1. Clone and set up Python environment
+**Prerequisites:** Python 3.11+, Node.js 18+, Anthropic API key
 
 ```bash
+# Clone and set up Python environment
 git clone https://github.com/YOUR_USERNAME/research-agent.git
 cd research-agent
-
 python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
+source venv/bin/activate
 pip install -r backend/requirements.txt
-```
 
-### 2. Add your API key
-
-```bash
+# Add your API key
 cp backend/.env.example backend/.env
-# Open backend/.env and add your Anthropic API key
-```
+# Edit backend/.env and add ANTHROPIC_API_KEY=...
 
-### 3. Start the backend
-
-```bash
+# Terminal 1 — backend
 cd backend
 uvicorn main:app --reload --port 8000
-```
 
-API docs available at `http://localhost:8000/docs`
-
-### 4. Start the frontend
-
-```bash
+# Terminal 2 — frontend
 cd frontend
 npm install
 npm run dev
-# Opens at http://localhost:5173
-```
-
-### 5. Run the test suite
-
-```bash
-# From project root
-python -m pytest evals/ -v
+# → http://localhost:5173
 ```
 
 ---
@@ -190,10 +173,12 @@ python -m pytest evals/ -v
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/` | Health check |
-| POST | `/research` | Start a research session, returns `session_id` |
-| GET | `/research/{id}` | Poll for results |
-| WS | `/ws/{id}` | Stream real-time agent updates |
+| `GET` | `/` | Health check |
+| `POST` | `/research` | Start a research session → returns `session_id` |
+| `GET` | `/research/{id}` | Poll for completed results |
+| `WS` | `/ws/{id}` | Stream real-time agent updates |
+
+Interactive docs at `http://localhost:8000/docs`
 
 ### Example
 
@@ -208,6 +193,16 @@ curl -X POST http://localhost:8000/research \
 
 # Connect via WebSocket to receive live updates as each agent completes
 ```
+
+---
+
+## Tests
+
+```bash
+python -m pytest evals/ -v
+```
+
+Each agent has unit tests with mock data (fast, no API calls). Search agent tests hit real arXiv. API tests use FastAPI's TestClient. ~40 tests total.
 
 ---
 
@@ -258,3 +253,7 @@ Key concepts practiced:
 - **Async Python** — FastAPI, WebSockets, running blocking LangGraph in thread pools
 - **Multi-agent verification** — having agents check each other's work
 - **Evaluation-driven development** — writing quantitative metrics before calling something "working"
+
+---
+
+*Built by Mehul Goel · NYU · 2026*
