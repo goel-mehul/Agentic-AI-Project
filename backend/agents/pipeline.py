@@ -90,6 +90,7 @@ def create_initial_state(research_question: str) -> ResearchState:
         search_strategy="",
         raw_papers=[],
         retrieved_chunks=[],
+        citation_counts={},
         evidence_quality={},
         contradictions=[],
         gaps=[],
