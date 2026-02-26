@@ -179,27 +179,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     active_connections[session_id] = websocket
 
     try:
-        ping_counter = 0
-        while session_id in sessions and sessions[session_id]["status"] == "running":
-            await asyncio.sleep(1)
-             ping_counter += 1
-            if ping_counter % 30 == 0:  # ping every 30 seconds
-            # Send keepalive ping every 30 seconds to prevent timeout
-            try:
-                await websocket.send_json({"type": "ping"})
-            except Exception:
+        # Keep connection alive until pipeline finishes
+        while True:
+            session = sessions.get(session_id)
+
+            if not session:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Session not found"
+                })
                 break
 
-        # Send final state if complete
-        if session_id in sessions and sessions[session_id]["status"] == "complete":
-            state = sessions[session_id]["state"]
-            await websocket.send_json({
-                "type": "complete",
-                "report": state.get("final_report", ""),
-                "papers_found": len(state.get("raw_papers", [])),
-                "contradictions": state.get("contradictions", []),
-                "gaps": state.get("gaps", [])
-            })
+            if session["status"] != "running":
+                break
+
+            # Small wait to avoid busy-polling
+            await asyncio.sleep(0.3)
 
     except WebSocketDisconnect:
         pass
