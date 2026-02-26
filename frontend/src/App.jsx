@@ -417,9 +417,19 @@ function Workspace({
               </div>
             )}
             {report ? (
-              <div className="report-content">
-                <ReactMarkdown>{report}</ReactMarkdown>
-              </div>
+              <>
+                <div className="report-toolbar">
+                  <div className="report-toolbar-info">
+                    Research Report · {report.split(" ").length} words
+                  </div>
+                  <button className="btn-download" onClick={() => window.print()}>
+                    ↓ Download PDF
+                  </button>
+                </div>
+                <div className="report-content" id="printable-report">
+                  <ReactMarkdown>{report}</ReactMarkdown>
+                </div>
+              </>
             ) : (
               <div className="report-waiting">
                 <div className="spinner" />
