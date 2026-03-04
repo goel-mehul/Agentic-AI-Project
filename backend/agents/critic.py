@@ -96,13 +96,13 @@ def critic_agent(state: ResearchState) -> ResearchState:
         f"Source: {c['metadata'].get('source', 'Unknown')}\n\n"
         f"Citations: {citation_counts.get(c['metadata'].get('paper_id', ''), 'Unknown')}\n\n"
         f"{c['content'][:800]}"
-        for c in chunks[:8]  # Cap at 8 to control token usage
+        for c in chunks[:12]  # Increased cap to handle more chunks from full papers
     ])
 
     # ── Call Claude ───────────────────────────────────────────────────────
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",  # Fast + cheap for evaluation tasks
-        max_tokens=1500,
+        max_tokens=2000,
         system=CRITIC_SYSTEM_PROMPT,
         messages=[
             {
