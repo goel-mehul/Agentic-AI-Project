@@ -29,6 +29,8 @@ WHAT YOU'RE LEARNING:
 import requests
 import chromadb
 import time
+import io
+import re 
 from chromadb.utils import embedding_functions
 from .state import ResearchState
 
@@ -129,6 +131,86 @@ def _search_semantic_scholar(query: str, max_results: int = 3) -> list[dict]:
 
     return papers
 
+# ── PDF Download & Extraction ─────────────────────────────────────────────────
+
+def _download_and_extract_pdf(url: str) -> str | None:
+    """
+    Download a PDF from arXiv and extract clean text.
+    Returns None if download fails or text is too short to be useful.
+    """
+    try:
+        import fitz  # pymupdf
+        resp = requests.get(url, timeout=20)
+        if resp.status_code != 200:
+            return None
+
+        # Load PDF from bytes
+        doc = fitz.open(stream=io.BytesIO(resp.content), filetype="pdf")
+        full_text = ""
+        for page in doc:
+            full_text += page.get_text()
+        doc.close()
+
+        # Clean up the text
+        full_text = re.sub(r'\n{3,}', '\n\n', full_text)  # collapse excessive newlines
+        full_text = re.sub(r'[ \t]+', ' ', full_text)      # collapse spaces
+
+        # Must be substantial to be worth using
+        if len(full_text.split()) < 500:
+            return None
+
+        return full_text.strip()
+
+    except Exception as e:
+        print(f"[Search] PDF extraction failed for {url}: {e}")
+        return None
+
+
+def _chunk_by_section(full_text: str, paper_title: str) -> list[str]:
+    """
+    Split full paper text into meaningful chunks by section.
+    Falls back to fixed-size chunking if sections aren't detectable.
+    Each chunk is prefixed with the paper title for context.
+    """
+    # Common section headers in academic papers
+    section_pattern = re.compile(
+        r'\n(?:Abstract|Introduction|Background|Related Work|'
+        r'Methodology|Methods|Approach|Experiments|Results|'
+        r'Evaluation|Discussion|Conclusion|Limitations|'
+        r'References|Acknowledgements)\s*\n',
+        re.IGNORECASE
+    )
+
+    sections = section_pattern.split(full_text)
+    section_names = section_pattern.findall(full_text)
+
+    chunks = []
+
+    if len(sections) >= 3:
+        # Successfully split by sections — skip references and acknowledgements
+        skip_sections = {'references', 'acknowledgements', 'acknowledgments'}
+        for i, section_text in enumerate(sections):
+            section_name = section_names[i - 1].strip() if i > 0 else "Introduction"
+            if section_name.lower() in skip_sections:
+                continue
+            text = section_text.strip()
+            if len(text.split()) < 50:  # skip tiny sections
+                continue
+            chunk = f"Title: {paper_title}\nSection: {section_name}\n\n{text[:2000]}"
+            chunks.append(chunk)
+    else:
+        # Fallback: fixed-size chunks of ~400 words with overlap
+        words = full_text.split()
+        chunk_size = 400
+        overlap = 50
+        for i in range(0, len(words), chunk_size - overlap):
+            chunk_words = words[i:i + chunk_size]
+            if len(chunk_words) < 50:
+                continue
+            chunk = f"Title: {paper_title}\n\n{' '.join(chunk_words)}"
+            chunks.append(chunk)
+
+    return chunks
 
 # ── ChromaDB: Store + Retrieve ────────────────────────────────────────────────
 
@@ -170,24 +252,57 @@ def _store_and_retrieve(
     docs, ids, metadatas = [], [], []
     seen_ids = set()
 
-    for i, paper in enumerate(papers):
-        uid = f"doc_{i}"
-        if uid in seen_ids or not paper.get("abstract"):
-            continue
-        seen_ids.add(uid)
+    # Sort papers by citation count — top 3 get full PDF treatment
+    sorted_papers = sorted(
+        papers,
+        key=lambda p: p.get("citation_count", 0),
+        reverse=True
+    )
+    top_paper_ids = {
+        p.get("paper_id") for p in sorted_papers[:3]
+        if p.get("source") == "arxiv"  # only arXiv has free PDFs
+    }
 
-        # We embed title + abstract together for richer semantic signal
-        text = f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
-        docs.append(text)
-        ids.append(uid)
-        metadatas.append({
-            "title":    paper["title"],
-            "authors":  ", ".join(paper["authors"]),
+    chunk_counter = 0
+    for i, paper in enumerate(papers):
+        if not paper.get("abstract"):
+            continue
+
+        meta = {
+            "title":     paper["title"],
+            "authors":   ", ".join(paper["authors"]),
             "published": paper["published"],
-            "source":   paper["source"],
-            "url":      paper["url"],
-            "paper_id": paper["paper_id"]
-        })
+            "source":    paper["source"],
+            "url":       paper["url"],
+            "paper_id":  paper["paper_id"]
+        }
+
+        # Try full PDF for top 3 arXiv papers
+        if paper.get("paper_id") in top_paper_ids and paper.get("url"):
+            print(f"[Search] Downloading full PDF: {paper['title'][:50]}...")
+            full_text = _download_and_extract_pdf(paper["url"])
+            if full_text:
+                section_chunks = _chunk_by_section(full_text, paper["title"])
+                for j, chunk in enumerate(section_chunks):
+                    uid = f"doc_{i}_chunk_{j}"
+                    if uid not in seen_ids:
+                        seen_ids.add(uid)
+                        docs.append(chunk)
+                        ids.append(uid)
+                        metadatas.append(meta)
+                        chunk_counter += 1
+                print(f"[Search] Extracted {len(section_chunks)} sections from full paper")
+                continue  # skip abstract fallback
+
+        # Fallback: abstract only
+        uid = f"doc_{i}"
+        if uid not in seen_ids:
+            seen_ids.add(uid)
+            text = f"Title: {paper['title']}\n\nAbstract: {paper['abstract']}"
+            docs.append(text)
+            ids.append(uid)
+            metadatas.append(meta)
+            chunk_counter += 1
 
     if not docs:
         return []
@@ -195,10 +310,15 @@ def _store_and_retrieve(
     # Insert all papers into ChromaDB
     collection.add(documents=docs, ids=ids, metadatas=metadatas)
 
-    # Query: find top_k papers most similar to the research question
+    # Dynamic retrieval: between 8 and 16 chunks based on available evidence
+    min_chunks = 8
+    max_chunks = 16
+    n_results = min(max_chunks, max(min_chunks, len(docs)))
+    n_results = min(n_results, len(docs))  # can't retrieve more than we have
+
     results = collection.query(
         query_texts=[research_question],
-        n_results=min(top_k, len(docs))
+        n_results=n_results
     )
 
     # Format results for the next agents
