@@ -51,7 +51,8 @@ Critical rules:
 - Every major claim needs an inline citation
 - If evidence quality is low for a claim, caveat it explicitly
 - If two papers disagree, present BOTH views — never pick one without justification
-- Aim for 600-900 words in the main body
+- Let the depth of evidence determine report length naturally — aim for 1000-2400 words depending on how much the retrieved evidence supports. If evidence is rich and varied across multiple papers and sections, write more. If evidence is limited, write less rather than padding or repeating points.
+- Never repeat a finding to fill space. Quality over length.
 - Never fabricate citations — only cite papers actually in the evidence"""
 
 
@@ -86,8 +87,8 @@ def writer_agent(state: ResearchState) -> ResearchState:
         f"Published: {c['metadata'].get('published', 'Unknown')}\n"
         f"Source: {c['metadata'].get('source', 'Unknown')}\n"
         f"URL: {c['metadata'].get('url', '')}\n\n"
-        f"{c['content'][:1000]}"
-        for c in chunks[:8]
+        f"{c['content'][:1500]}"
+        for c in chunks
     ])
 
     # Format critic outputs so Writer knows what to caveat
@@ -109,7 +110,7 @@ def writer_agent(state: ResearchState) -> ResearchState:
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=3000,
+        max_tokens=5000,
         system=WRITER_SYSTEM_PROMPT,
         messages=[
             {
