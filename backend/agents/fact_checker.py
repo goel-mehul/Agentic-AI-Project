@@ -26,7 +26,6 @@ WHAT YOU'RE LEARNING:
     - How to finalize and annotate a pipeline's output
 """
 
-import json
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from .state import ResearchState
@@ -34,16 +33,10 @@ from .state import ResearchState
 load_dotenv()
 client = Anthropic()
 
-
 FACT_CHECKER_SYSTEM_PROMPT = """You are a meticulous fact-checker reviewing an AI-generated research report.
 
 Your job: verify that every major claim in the report is actually supported by the provided source evidence.
-
-Output a JSON object with exactly these fields:
-- "corrected_report": the full corrected markdown report (fix issues inline, preserve structure)
-- "corrections_made": list of strings describing each change you made (empty list if none needed)
-- "overall_confidence": exactly one of "High", "Medium", or "Low"
-- "confidence_rationale": 1-2 sentences explaining the confidence rating
+Call the submit_fact_check tool with your results.
 
 Confidence guide:
 - High: Most claims are well-supported by multiple recent, relevant papers
@@ -53,8 +46,36 @@ Confidence guide:
 Rules:
 - Only correct claims that are genuinely unsupported or overstated
 - Preserve the report's structure, tone, and markdown formatting
-- If a claim is supported, leave it alone — don't over-correct
-- Output ONLY valid JSON, no explanation, no markdown fences"""
+- If a claim is supported, leave it alone — don't over-correct"""
+
+FACT_CHECKER_TOOL = {
+    "name": "submit_fact_check",
+    "description": "Submit the fact-checked and corrected research report.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "corrected_report": {
+                "type": "string",
+                "description": "The full corrected markdown report. Fix issues inline, preserve structure."
+            },
+            "corrections_made": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of corrections made. Empty list if none needed."
+            },
+            "overall_confidence": {
+                "type": "string",
+                "enum": ["High", "Medium", "Low"],
+                "description": "Confidence rating for the report."
+            },
+            "confidence_rationale": {
+                "type": "string",
+                "description": "1-2 sentences explaining the confidence rating."
+            }
+        },
+        "required": ["corrected_report", "corrections_made", "overall_confidence", "confidence_rationale"]
+    }
+}
 
 
 def fact_checker_agent(state: ResearchState) -> ResearchState:
@@ -95,9 +116,11 @@ def fact_checker_agent(state: ResearchState) -> ResearchState:
 
     # ── Call Claude ───────────────────────────────────────────────────────
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",  # Haiku sufficient for verification
-        max_tokens=4000,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=6000,
         system=FACT_CHECKER_SYSTEM_PROMPT,
+        tools=[FACT_CHECKER_TOOL],
+        tool_choice={"type": "any"},
         messages=[
             {
                 "role": "user",
@@ -111,15 +134,8 @@ def fact_checker_agent(state: ResearchState) -> ResearchState:
         ]
     )
 
-    # ── Parse response ────────────────────────────────────────────────────
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
-    result = json.loads(raw)
+    tool_block = next(b for b in response.content if b.type == "tool_use")
+    result     = tool_block.input
 
     corrected_report = result.get("corrected_report", draft)
     corrections      = result.get("corrections_made", [])

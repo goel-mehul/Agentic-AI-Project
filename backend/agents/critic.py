@@ -26,7 +26,6 @@ WHAT YOU'RE LEARNING:
     - How to prompt for structured critical analysis
 """
 
-import json
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from .state import ResearchState
@@ -41,19 +40,78 @@ client = Anthropic()
 
 CRITIC_SYSTEM_PROMPT = """You are a rigorous academic peer reviewer with high standards.
 
-Your job: critically evaluate a set of research papers retrieved for a given question.
+Your job: critically evaluate a set of research papers retrieved for a given question by calling the submit_critique tool.
 
-Output a JSON object with exactly these fields:
-- "quality_scores": ddict mapping paper titles to scores 0.0-1.0 with brief rationale
-  NOTE: Papers with higher citation counts (100+) should receive a quality score boost
-  of up to 0.1, as citation count is a proxy for community validation.
-- "contradictions": list of strings describing conflicting findings between papers (empty list if none)
-- "gaps": list of strings describing important aspects of the question NOT covered by the evidence
-- "high_quality_papers": list of 3-5 paper titles that are most reliable and relevant
-- "summary": 2-3 sentences on overall evidence quality
+Be intellectually honest. Finding weaknesses makes the final report MORE credible, not less."""
 
-Be intellectually honest. Finding weaknesses makes the final report MORE credible, not less.
-Output ONLY valid JSON, no explanation, no markdown."""
+CRITIC_TOOL = {
+    "name": "submit_critique",
+    "description": "Submit a structured critical evaluation of the retrieved research evidence.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "quality_scores": {
+                "type": "object",
+                "description": "Dict mapping paper titles to objects with score (0.0-1.0) and rationale. Papers with 100+ citations should receive a quality boost of up to 0.1.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "score":     {"type": "number"},
+                        "rationale": {"type": "string"}
+                    },
+                    "required": ["score", "rationale"]
+                }
+            },
+            "contradictions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Conflicting findings between papers. Empty list if none."
+            },
+            "gaps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Important aspects of the question NOT covered by the evidence."
+            },
+            "high_quality_papers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "3-5 paper titles that are most reliable and relevant."
+            },
+            "summary": {
+                "type": "string",
+                "description": "2-3 sentences on overall evidence quality."
+            }
+        },
+        "required": ["quality_scores", "contradictions", "gaps", "high_quality_papers", "summary"]
+    }
+}
+
+GAP_QUERY_TOOL = {
+    "name": "generate_gap_queries",
+    "description": "Convert evidence gaps into precise academic search queries.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "2-3 short, specific search queries (4-7 words each) suitable for arXiv and Semantic Scholar. Each query should directly target one of the identified gaps using academic terminology."
+            }
+        },
+        "required": ["queries"]
+    }
+}
+
+GAP_QUERY_SYSTEM_PROMPT = """You are an expert academic search specialist.
+
+Your job: convert descriptions of evidence gaps into precise, short search queries
+suitable for arXiv and Semantic Scholar. Call the generate_gap_queries tool.
+
+Rules:
+- Each query must be 4-7 words
+- Use academic/technical terminology
+- Each query should target a different gap
+- Queries should be specific enough to find relevant papers"""
 
 
 def critic_agent(state: ResearchState) -> ResearchState:
@@ -101,9 +159,11 @@ def critic_agent(state: ResearchState) -> ResearchState:
 
     # ── Call Claude ───────────────────────────────────────────────────────
     response = client.messages.create(
-        model="claude-haiku-4-5-20251001",  # Fast + cheap for evaluation tasks
+        model="claude-haiku-4-5-20251001",
         max_tokens=1500,
         system=CRITIC_SYSTEM_PROMPT,
+        tools=[CRITIC_TOOL],
+        tool_choice={"type": "any"},
         messages=[
             {
                 "role": "user",
@@ -116,29 +176,38 @@ def critic_agent(state: ResearchState) -> ResearchState:
         ]
     )
 
-    # ── Parse response ────────────────────────────────────────────────────
-    raw = response.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+    tool_block = next(b for b in response.content if b.type == "tool_use")
+    critique   = tool_block.input
 
-    critique = json.loads(raw)
-
-    # ── Write outputs to state ────────────────────────────────────────────
     state["evidence_quality"] = critique.get("quality_scores", {})
     state["contradictions"]   = critique.get("contradictions", [])
     state["gaps"]             = critique.get("gaps", [])
 
-    # Generate targeted search queries for each gap
-    # These are used if the pipeline loops back to Search
+    # NEW: dedicated Haiku call to generate gap queries instead of string slicing
     gap_queries = []
-    for gap in state["gaps"][:3]:  # Limit to 3 gap queries max
-        # Turn the gap description into a search query
-        # Simple approach: take the first 8 words of the gap description
-        words = gap.replace(",", "").split()[:8]
-        gap_queries.append(" ".join(words))
+    if state["gaps"]:
+        gaps_text = "\n".join(f"- {g}" for g in state["gaps"][:3])
+
+        gap_response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            system=GAP_QUERY_SYSTEM_PROMPT,
+            tools=[GAP_QUERY_TOOL],
+            tool_choice={"type": "any"},
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Research question: {question}\n\n"
+                        f"Evidence gaps identified:\n{gaps_text}\n\n"
+                        f"Generate precise search queries to fill these gaps."
+                    )
+                }
+            ]
+        )
+
+        gap_tool_block = next(b for b in gap_response.content if b.type == "tool_use")
+        gap_queries    = gap_tool_block.input.get("queries", [])
 
     state["gap_queries"] = gap_queries
 

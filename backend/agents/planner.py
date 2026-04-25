@@ -22,7 +22,6 @@ WHAT YOU'RE LEARNING:
     - How an agent reads from and writes to shared state
 """
 
-import json
 import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -41,19 +40,38 @@ client = Anthropic()
 
 PLANNER_SYSTEM_PROMPT = """You are a research planning expert working with academic databases.
 
-Your job: take a research question and create a precise search plan.
-
-Output a JSON object with exactly these fields:
-- "sub_questions": list of 3-5 focused sub-questions that together fully answer the main question
-- "search_queries": list of 4-6 specific search queries optimized for arXiv and Semantic Scholar
-- "strategy": 2-3 sentences describing the overall research approach
+Your job: take a research question and create a precise search plan by calling the create_research_plan tool.
 
 Rules:
 - Be specific and technical, not vague
 - Search queries should use academic terminology
-- Each query should target a different aspect of the question
-- Output ONLY valid JSON, no explanation, no markdown code fences"""
+- Each query should target a different aspect of the question"""
 
+
+PLANNER_TOOL = {
+    "name": "create_research_plan",
+    "description": "Create a structured research plan for a given academic question.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sub_questions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "3-5 focused sub-questions that together fully answer the main question"
+            },
+            "search_queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "4-6 specific search queries optimized for arXiv and Semantic Scholar"
+            },
+            "strategy": {
+                "type": "string",
+                "description": "2-3 sentences describing the overall research approach"
+            }
+        },
+        "required": ["sub_questions", "search_queries", "strategy"]
+    }
+}
 
 # ── Agent Function ────────────────────────────────────────────────────────────
 # Every agent in our pipeline follows the same pattern:
@@ -85,6 +103,8 @@ def planner_agent(state: ResearchState) -> ResearchState:
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
         system=PLANNER_SYSTEM_PROMPT,
+        tools=[PLANNER_TOOL],
+        tool_choice={"type": "any"},
         messages=[
             {
                 "role": "user",
@@ -93,17 +113,8 @@ def planner_agent(state: ResearchState) -> ResearchState:
         ]
     )
 
-    # ── Parse the JSON response ───────────────────────────────────────────
-    raw = response.content[0].text.strip()
-
-    # Defensive: strip markdown code fences if Claude added them anyway
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
-    plan_data = json.loads(raw)
+    tool_block = next(b for b in response.content if b.type == "tool_use")
+    plan_data  = tool_block.input
 
     # ── Write outputs back to state ───────────────────────────────────────
     state["research_plan"]   = plan_data.get("search_queries", [])
