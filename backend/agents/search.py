@@ -163,7 +163,8 @@ def _store_and_retrieve(
 
     collection = chroma_client.create_collection(
         name=collection_name,
-        embedding_function=embedding_fn
+        embedding_function=embedding_fn,
+        metadata={"hnsw:space": "cosine"}
     )
 
     # Build lists for ChromaDB batch insert
@@ -209,9 +210,9 @@ def _store_and_retrieve(
             results["metadatas"][0],
             results["distances"][0]
         )):
-            # ChromaDB returns L2 distance — convert to 0-1 similarity score
-            # Lower distance = more similar, so we invert it
-            similarity = round(1 / (1 + dist), 3)
+            # ChromaDB returns cosine distance (0-1) — convert to cosine similarity
+            # Cosine distance = 1 - cosine similarity, so we invert it
+            similarity = round(1 - dist, 3)
             chunks.append({
                 "content": doc,
                 "metadata": meta,

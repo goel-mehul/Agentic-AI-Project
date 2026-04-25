@@ -189,8 +189,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 "report": state.get("final_report", ""),
                 "papers_found": len(state.get("raw_papers", [])),
                 "contradictions": state.get("contradictions", []),
-                "gaps": state.get("gaps", [])
+                "gaps": state.get("gaps", []),
+                "faithfulness_scores": state.get("faithfulness_scores", {})
             })
+        
 
     except WebSocketDisconnect:
         pass
@@ -270,7 +272,9 @@ async def _run_pipeline(session_id: str, initial_state: dict):
             "report":         final_state.get("final_report", ""),
             "papers_found":   len(final_state.get("raw_papers", [])),
             "contradictions": final_state.get("contradictions", []),
-            "gaps":           final_state.get("gaps", [])
+            "gaps":           final_state.get("gaps", []),
+            "faithfulness_scores": final_state.get("faithfulness_scores", {})
+
         })
 
     except Exception as e:

@@ -4,6 +4,8 @@ import { AGENTS, AGENT_IDS } from "./agents"
 
 const API = "https://agentic-ai-project-production.up.railway.app"
 
+//const API = "http://localhost:8000"
+
 
 async function startResearch(question) {
   const res = await fetch(`${API}/research`, {
@@ -28,6 +30,7 @@ export default function App() {
   const [error, setError]                     = useState("")
   const [activeTab, setActiveTab]             = useState("logs") // "logs" | "report"
   const [searchIteration, setSearchIteration] = useState(0)
+  const [faithfulnessAvg, setFaithfulnessAvg] = useState(null)
   const wsRef     = useRef(null)
   const logEndRef = useRef(null)
 
@@ -59,6 +62,7 @@ export default function App() {
     setPapersFound(0)
     setActiveTab("logs")
     setSearchIteration(0)
+    setFaithfulnessAvg(null)
 
     try {
       const { session_id } = await startResearch(question)
@@ -71,6 +75,7 @@ export default function App() {
 
   function connectWebSocket(sessionId) {
     const ws = new WebSocket(`wss://agentic-ai-project-production.up.railway.app/ws/${sessionId}`)
+    //const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`)
     wsRef.current = ws
 
     ws.onmessage = (evt) => {
@@ -100,6 +105,12 @@ export default function App() {
         setStatus("complete")
         setActiveAgent(null)
         setCompletedAgents(new Set(AGENT_IDS))
+        // Compute average faithfulness score from all chunks
+        const scores = Object.values(msg.faithfulness_scores || {})
+        if (scores.length > 0) {
+          const avg = scores.reduce((a, b) => a + b, 0) / scores.length
+          setFaithfulnessAvg(avg.toFixed(2))
+        }
       }
       if (msg.type === "error") {
         setError(msg.message)
@@ -180,6 +191,7 @@ export default function App() {
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             searchIteration={searchIteration}
+            faithfulnessAvg={faithfulnessAvg}
           />
         )}
       </main>
@@ -257,7 +269,7 @@ function Workspace({
   activeAgent, selectedAgent, setSelectedAgent,
   selectedAgentData, selectedAgentLogs,
   getAgentState, report, papersFound,
-  error, activeTab, setActiveTab,searchIteration 
+  error, activeTab, setActiveTab,searchIteration, faithfulnessAvg 
 }) {
   return (
     <div className="workspace">
@@ -355,6 +367,15 @@ function Workspace({
             <div className="stat-value">1</div>
             <div className="stat-label">Report</div>
           </div>
+          {faithfulnessAvg && (
+            <>
+              <div className="stat-divider" />
+              <div className="stat-item">
+                <div className="stat-value">{faithfulnessAvg}</div>
+                <div className="stat-label">Faithfulness</div>
+              </div>
+            </>
+          )}
         </div>
         )}
       </aside>

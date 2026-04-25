@@ -40,9 +40,16 @@ client = Anthropic()
 
 CRITIC_SYSTEM_PROMPT = """You are a rigorous academic peer reviewer with high standards.
 
-Your job: critically evaluate a set of research papers retrieved for a given question by calling the submit_critique tool.
+Your job: critically evaluate a set of research papers retrieved for a given question by calling the submit_critique tool with these fields:
 
-Be intellectually honest. Finding weaknesses makes the final report MORE credible, not less."""
+- quality_scores: mapping of paper titles to scores 0.0-1.0 with brief rationale. Papers with 100+ citations should receive a quality boost of up to 0.1.
+- contradictions: list of strings describing conflicting findings between papers (empty list if none)
+- gaps: list of strings describing important aspects of the question NOT covered by the evidence. Be specific — name the missing technique categories, domains, or comparisons.
+- high_quality_papers: list of 3-5 paper titles that are most reliable and relevant
+- summary: 2-3 sentences on overall evidence quality — which papers are most relevant, what is covered well, and what critical gaps remain.
+
+Be intellectually honest. Finding weaknesses makes the final report MORE credible, not less.
+If your summary identifies limitations, those limitations must appear in the gaps field."""
 
 CRITIC_TOOL = {
     "name": "submit_critique",
@@ -70,7 +77,7 @@ CRITIC_TOOL = {
             "gaps": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Important aspects of the question NOT covered by the evidence."
+                "description": "Important aspects of the question NOT covered by the evidence. Be thorough — even well-covered topics have gaps. Consider: missing technique categories, lack of empirical comparisons, underrepresented domains, missing failure mode analysis, or absence of scalability discussion. Only return empty list if evidence is truly comprehensive."
             },
             "high_quality_papers": {
                 "type": "array",
@@ -79,8 +86,8 @@ CRITIC_TOOL = {
             },
             "summary": {
                 "type": "string",
-                "description": "2-3 sentences on overall evidence quality."
-            }
+                "description": "2-3 sentences on overall evidence quality. This field is required and must not be empty. Describe which papers are most relevant, what the collection covers well, and what critical gaps remain."
+            },
         },
         "required": ["quality_scores", "contradictions", "gaps", "high_quality_papers", "summary"]
     }
@@ -213,14 +220,26 @@ def critic_agent(state: ResearchState) -> ResearchState:
 
     n_papers        = len(state["evidence_quality"])
     n_contradictions = len(state["contradictions"])
-    n_gaps          = len(state["gaps"])
-    summary         = critique.get("summary", "")
+    n_gaps           = len(state["gaps"])
+    summary          = critique.get("summary", "")
+    if not summary:
+        n_papers = len(critique.get("quality_scores", {}))
+        summary = f"Evaluated {n_papers} papers. Found {n_gaps} gap(s) in evidence coverage."
 
-    state["agent_logs"] = [
-    f"✅ Critic: Evaluation complete",
-    f"⚡ Found {n_contradictions} contradiction(s), {n_gaps} gap(s)",
-    f"🎯 Generated {len(gap_queries)} gap-filling search queries",
-    f"📊 Summary: {summary}"
-]
+    logs = [
+        f"✅ Critic: Evaluation complete",
+        f"⚡ Found {n_contradictions} contradiction(s), {n_gaps} gap(s)",
+    ]
+
+    for c in state["contradictions"][:2]:
+        logs.append(f"⚡ {c}")
+
+    for g in state["gaps"][:3]:
+        logs.append(f"🕳️  {g}")
+
+    logs.append(f"🎯 Generated {len(gap_queries)} gap-filling search queries")
+    logs.append(f"📊 Summary: {summary}")
+
+    state["agent_logs"] = logs
 
     return state
