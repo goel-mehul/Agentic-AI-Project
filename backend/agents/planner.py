@@ -54,22 +54,17 @@ PLANNER_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "sub_questions": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "3-5 focused sub-questions that together fully answer the main question"
-            },
             "search_queries": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "4-6 specific search queries optimized for arXiv and Semantic Scholar"
+                "description": "4-6 specific search queries optimized for arXiv and Semantic Scholar. Use academic terminology. Each query should target a different aspect of the question."
             },
             "strategy": {
                 "type": "string",
                 "description": "2-3 sentences describing the overall research approach"
             }
         },
-        "required": ["sub_questions", "search_queries", "strategy"]
+        "required": ["search_queries", "strategy"]
     }
 }
 

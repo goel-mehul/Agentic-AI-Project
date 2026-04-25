@@ -19,9 +19,13 @@ def make_state(question: str) -> ResearchState:
         session_id=str(uuid.uuid4()),
         research_plan=[], search_strategy="",
         raw_papers=[], retrieved_chunks=[],
+        citation_counts={},
         evidence_quality={}, contradictions=[], gaps=[],
+        search_iteration=0,
+        gap_queries=[],
         draft_report="", report_sections={},
         final_report="", fact_check_notes=[],
+        faithfulness_scores={},
         agent_logs=[], current_agent="",
         status="running", error=""
     )

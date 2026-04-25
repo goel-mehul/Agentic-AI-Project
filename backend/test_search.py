@@ -17,9 +17,13 @@ def make_state(question: str) -> ResearchState:
         session_id=str(uuid.uuid4()),
         research_plan=[], search_strategy="",
         raw_papers=[], retrieved_chunks=[],
+        citation_counts={},
         evidence_quality={}, contradictions=[], gaps=[],
+        search_iteration=0,
+        gap_queries=[],
         draft_report="", report_sections={},
         final_report="", fact_check_notes=[],
+        faithfulness_scores={},
         agent_logs=[], current_agent="",
         status="running", error=""
     )
@@ -47,5 +51,9 @@ if __name__ == "__main__":
         meta = chunk["metadata"]
         print(f"\n  📄 {meta['title']}")
         print(f"     {meta['authors']} ({meta['published']}) [{meta['source']}]")
+
+    print("\nFaithfulness Scores:")
+    for chunk_id, score in state["faithfulness_scores"].items():
+        print(f"  {chunk_id}: {score}")
 
     print("\n✅ Search Agent test complete!")

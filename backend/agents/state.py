@@ -43,6 +43,7 @@ class ResearchState(TypedDict):
     raw_papers: list[dict]      # All papers fetched from arXiv / Semantic Scholar
     retrieved_chunks: list[dict] # Top-k most relevant paper sections (from ChromaDB)
     citation_counts: dict       # Maps paper_id -> citation count (from Semantic Scholar)
+    faithfulness_scores: dict   # Maps chunk index -> cosine similarity score
 
     # ── Critic Agent outputs ─────────────────────────────────────────────
     evidence_quality: dict      # Quality scores per paper

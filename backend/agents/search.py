@@ -204,8 +204,19 @@ def _store_and_retrieve(
     # Format results for the next agents
     chunks = []
     if results["documents"] and results["documents"][0]:
-        for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
-            chunks.append({"content": doc, "metadata": meta})
+        for i, (doc, meta, dist) in enumerate(zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0]
+        )):
+            # ChromaDB returns L2 distance — convert to 0-1 similarity score
+            # Lower distance = more similar, so we invert it
+            similarity = round(1 / (1 + dist), 3)
+            chunks.append({
+                "content": doc,
+                "metadata": meta,
+                "faithfulness_score": similarity
+            })
 
     return chunks
 
@@ -272,8 +283,28 @@ def search_agent(state: ResearchState) -> ResearchState:
     chunks = _store_and_retrieve(all_papers, question, session_id)
     state["retrieved_chunks"] = chunks
 
-    state["agent_logs"] = [
-        f"✅ Search: Retrieved {len(chunks)} most relevant sections"
-    ]
+    
+    # Compute average faithfulness score across retrieved chunks
+    scores = [c["faithfulness_score"] for c in chunks if "faithfulness_score" in c]
+    avg_score = round(sum(scores) / len(scores), 3) if scores else 0
+    low_quality = sum(1 for s in scores if s < 0.3)
+
+    # Store scores in state
+    state["faithfulness_scores"] = {
+        f"chunk_{i}": c["faithfulness_score"]
+        for i, c in enumerate(chunks)
+    }
+
+    # Log with warning if retrieval quality is low
+    if avg_score < 0.3:
+        state["agent_logs"] = [
+            f"✅ Search: Retrieved {len(chunks)} sections",
+            f"⚠️  Faithfulness: avg score {avg_score} — retrieval quality LOW, consider rephrasing question",
+        ]
+    else:
+        state["agent_logs"] = [
+            f"✅ Search: Retrieved {len(chunks)} sections",
+            f"📊 Faithfulness: avg score {avg_score} ({'⚠️ ' + str(low_quality) + ' low-quality chunks' if low_quality else '✅ all chunks above threshold'})",
+        ]
 
     return state
