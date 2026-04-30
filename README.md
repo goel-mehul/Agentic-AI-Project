@@ -273,6 +273,158 @@ Key concepts practiced:
 
 ---
 
-Final update done. 
+## V4 Improvements
+
+A significant update to the pipeline was made in v4, addressing core architectural 
+weaknesses identified during code review and adding new capabilities.
+
+---
+
+### 1. Structured Output via Claude's `tool_use` API
+
+**Problem:** All three structured-output agents (Planner, Critic, Fact Checker) were 
+prompting Claude to "output only valid JSON" and then manually parsing the response — 
+stripping markdown fences, calling bare `json.loads()`, and hoping the output was 
+well-formed. This approach was fragile: any truncation or formatting variation caused 
+an unhandled crash.
+
+**Fix:** Replaced manual JSON parsing with Claude's `tool_use` API across all three 
+agents. Each agent now defines an explicit output schema as a tool definition. Claude 
+is forced to call the tool with validated, structured arguments — the response arrives 
+as a Python dict with no parsing required.
+
+**Result:** Eliminates all bare `json.loads()` calls, all markdown fence stripping, 
+and all crash risk from malformed output. Also fixed a `ddict` typo in the Critic's 
+original system prompt that was sending a malformed instruction to the model.
+
+---
+
+### 2. Improved Gap Query Generation
+
+**Problem:** When the Critic identified evidence gaps, it generated gap-filling search 
+queries by taking the first 8 words of each gap description string. This produced 
+useless queries like *"The evidence does not sufficiently cover the"* — essentially 
+stop words with no search value.
+
+**Fix:** Replaced the string-slicing approach with a dedicated Claude Haiku call using 
+the `tool_use` API. The Critic now passes its gap descriptions to a second Haiku call 
+with a `generate_gap_queries` tool schema, which returns 2-3 precise, academic 
+4-7 word search queries directly targeting each gap.
+
+**Result:** Gap-filling queries are now meaningful academic search terms that actually 
+find relevant papers on subsequent loop passes.
+
+---
+
+### 3. Cosine Similarity Faithfulness Scoring
+
+**Problem:** ChromaDB was computing cosine similarity between retrieved chunks and the 
+research question during retrieval but the scores were being discarded. There was no 
+signal indicating whether the retrieved papers were actually relevant to the question.
+
+**Fix:** 
+- Switched ChromaDB collection from default L2 distance to cosine similarity space 
+  (`hnsw:space: cosine`)
+- Captured `results["distances"]` from ChromaDB and converted to cosine similarity 
+  scores (0-1) per chunk using `similarity = round(1 - dist, 3)`
+- Stored scores in `ResearchState` as `faithfulness_scores`
+- Computed average faithfulness score per search pass
+- Streamed scores to the frontend in real time via the agent activity feed
+- Surfaced the final average faithfulness score in the sidebar stats
+
+**Result:** Every search pass now emits a faithfulness signal. Scores above 0.3 
+indicate acceptable retrieval quality. Scores below 0.3 trigger a warning in the 
+logs. The final score is visible in the sidebar alongside papers found, agents, 
+and searches.
+
+**Why cosine similarity:** Cosine similarity measures the angle between two embedding 
+vectors regardless of magnitude, making it the correct metric for semantic similarity 
+between variable-length texts. L2 distance (the ChromaDB default) is sensitive to 
+vector magnitude and produces scores that are harder to interpret.
+
+---
+
+### 4. Gaps and Contradictions Streamed to UI
+
+**Problem:** The Critic was identifying detailed gaps and contradictions in the 
+evidence but only logging the counts ("Found 3 contradictions, 7 gaps") to the 
+frontend. The actual content was stored in state but never surfaced in the UI.
+
+**Fix:** Updated the Critic's `agent_logs` to include the full text of the top 2 
+contradictions and top 3 gaps on every evaluation pass, streamed in real time to 
+the Agent Activity feed.
+
+**Result:** During the demo, viewers can watch the Critic identify specific academic 
+gaps and contradictions as they stream in — making the system's reasoning process 
+visible and interpretable rather than a black box.
+
+---
+
+### 5. Faithfulness Score in Frontend Sidebar
+
+**Problem:** The faithfulness scores were computed and logged but never surfaced as 
+a persistent UI element after the pipeline completed.
+
+**Fix:** 
+- Added `faithfulness_scores` to the WebSocket `complete` message payload in 
+  `main.py`
+- Added `faithfulnessAvg` state to `App.jsx`
+- Computed the average across all chunk scores on pipeline completion
+- Added a "Faithfulness" stat to the sidebar alongside Papers, Agents, Searches, 
+  and Report
+
+**Result:** The final faithfulness score is now persistently visible in the sidebar 
+after every completed research run.
+
+---
+
+### 6. Paper Limit Increased from 35 to 50
+
+**Problem:** The loop condition `len(raw_papers) < 35` was too aggressive. Pass 1 
+typically retrieves 20-25 papers. Pass 2 adds another 15, bringing the total to 
+35-40 — which immediately blocked further loop passes even when significant gaps 
+remained. The gap-filling logic was being short-circuited by the paper count 
+condition before it could do meaningful work.
+
+**Fix:** Increased the paper limit from 35 to 50 in `should_search_again()`.
+
+**Result:** The iterative retrieval loop now runs more effectively when gaps exist, 
+allowing the gap-filling queries to find additional relevant papers across all 3 
+permitted passes.
+
+---
+
+### 7. Critic Prompt Restored and Improved
+
+**Problem:** During v4 development, multiple prompt iterations caused the Critic to 
+inconsistently populate the `gaps` field — sometimes returning 0 gaps despite a 
+summary clearly describing missing evidence. The summary field also returned empty 
+intermittently.
+
+**Fix:** 
+- Restored the original v1 explicit field-by-field instruction style in the system 
+  prompt, adapted for tool_use
+- Added explicit instruction: *"If your summary identifies limitations, those 
+  limitations must appear in the gaps field"*
+- Added auto-generated summary fallback when the model returns an empty summary field
+
+**Result:** The Critic now consistently populates gaps when evidence is incomplete, 
+and the summary field always contains meaningful content.
+
+---
+
+### Summary of Files Changed in V4
+
+| File | Change |
+|------|--------|
+| `backend/agents/planner.py` | Replaced JSON parsing with tool_use · removed unused sub_questions field |
+| `backend/agents/critic.py` | Replaced JSON parsing with tool_use · gap queries via dedicated Haiku call · restored explicit prompt · gaps/contradictions streamed to UI |
+| `backend/agents/fact_checker.py` | Replaced JSON parsing with tool_use · max_tokens increased to 6000 |
+| `backend/agents/search.py` | ChromaDB cosine similarity space · faithfulness scores captured and stored |
+| `backend/agents/state.py` | Added faithfulness_scores field |
+| `backend/agents/pipeline.py` | Added faithfulness_scores to initial state · paper limit 35 → 50 |
+| `backend/main.py` | faithfulness_scores added to WebSocket complete message |
+| `frontend/src/App.jsx` | Faithfulness score state · sidebar stat · WebSocket handler |
+| `backend/test_*.py` | All test files updated with missing state fields |
 
 *Built by Mehul Goel · NYU · 2026*
