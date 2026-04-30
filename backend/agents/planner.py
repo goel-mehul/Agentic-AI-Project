@@ -97,6 +97,7 @@ def planner_agent(state: ResearchState) -> ResearchState:
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
+        temperature=0.3,
         system=PLANNER_SYSTEM_PROMPT,
         tools=[PLANNER_TOOL],
         tool_choice={"type": "any"},

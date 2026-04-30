@@ -52,7 +52,23 @@ Critical rules:
 - If evidence quality is low for a claim, caveat it explicitly
 - If two papers disagree, present BOTH views — never pick one without justification
 - Aim for 600-900 words in the main body
-- Never fabricate citations — only cite papers actually in the evidence"""
+- Never fabricate citations — only cite papers actually in the evidence
+
+GROUNDING RULES:
+- Base every specific claim on the provided excerpts
+- If a specific detail (metric, percentage, method name) is not explicitly
+  stated in the excerpts, do not include it
+- You may use your knowledge to contextualize and connect findings, but all
+  specific factual claims must trace back to a provided excerpt
+- If evidence on a topic is limited or absent, say so explicitly rather than
+  filling gaps with general knowledge
+
+WHEN EVIDENCE IS INSUFFICIENT:
+- Do not fabricate claims to fill gaps
+- Explicitly note in the Gaps section when important aspects of the question
+  are not addressed by the retrieved evidence
+- For any claim you are uncertain about, add a qualifier such as
+  'according to the available abstracts' or 'based on the provided evidence'"""
 
 
 def writer_agent(state: ResearchState) -> ResearchState:
@@ -79,16 +95,39 @@ def writer_agent(state: ResearchState) -> ResearchState:
     # We give the Writer everything it needs in a structured prompt.
     # This is the key to getting a nuanced, well-grounded report.
 
-    # Format evidence with full metadata for citation generation
-    evidence_text = "\n\n---\n\n".join([
-        f"**{c['metadata'].get('title', 'Unknown')}**\n"
-        f"Authors: {c['metadata'].get('authors', 'Unknown')}\n"
-        f"Published: {c['metadata'].get('published', 'Unknown')}\n"
-        f"Source: {c['metadata'].get('source', 'Unknown')}\n"
-        f"URL: {c['metadata'].get('url', '')}\n\n"
-        f"{c['content'][:1000]}"
-        for c in chunks[:8]
-    ])
+    # Sort chunks by faithfulness score — lost in the middle fix
+    # Best chunk first, second best last, weakest in the middle
+    chunks_sorted = sorted(
+        chunks,
+        key=lambda x: x.get('faithfulness_score', 0),
+        reverse=True
+    )
+    if len(chunks_sorted) > 1:
+        best        = chunks_sorted[0]
+        remaining   = chunks_sorted[1:]
+        second_best = remaining.pop(0)
+        chunks_sorted = [best] + remaining + [second_best]
+
+    # Format evidence with strong separators and faithfulness scores
+    evidence_sections = []
+    for i, chunk in enumerate(chunks_sorted[:8]):
+        title     = chunk['metadata'].get('title', 'Unknown')
+        published = chunk['metadata'].get('published', 'Unknown')
+        authors   = chunk['metadata'].get('authors', 'Unknown')
+        source    = chunk['metadata'].get('source', 'Unknown')
+        url       = chunk['metadata'].get('url', '')
+        score     = chunk.get('faithfulness_score', 'N/A')
+
+        section = (
+            f"=== EXCERPT {i+1}: {title} ({published}) ===\n"
+            f"Authors: {authors} | Source: {source} | "
+            f"Faithfulness score: {score}\n"
+            f"URL: {url}\n\n"
+            f"{chunk['content'][:1000]}"
+        )
+        evidence_sections.append(section)
+
+    evidence_text = "\n\n".join(evidence_sections)
 
     # Format critic outputs so Writer knows what to caveat
     quality_text = json.dumps(evidence_quality, indent=2) if evidence_quality else "Not available"
@@ -110,6 +149,7 @@ def writer_agent(state: ResearchState) -> ResearchState:
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=3000,
+        temperature=0.7,
         system=WRITER_SYSTEM_PROMPT,
         messages=[
             {

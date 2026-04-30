@@ -168,6 +168,7 @@ def critic_agent(state: ResearchState) -> ResearchState:
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1500,
+        temperature=0.2,
         system=CRITIC_SYSTEM_PROMPT,
         tools=[CRITIC_TOOL],
         tool_choice={"type": "any"},
@@ -198,6 +199,7 @@ def critic_agent(state: ResearchState) -> ResearchState:
         gap_response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=256,
+            temperature=0.2,
             system=GAP_QUERY_SYSTEM_PROMPT,
             tools=[GAP_QUERY_TOOL],
             tool_choice={"type": "any"},
