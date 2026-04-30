@@ -40,7 +40,7 @@ def should_search_again(state: ResearchState) -> str:
     Loops back if ALL of these are true:
     - We've done fewer than 2 extra search passes (prevents infinite loops)
     - The Critic found at least 2 gaps (worth searching again)
-    - We have fewer than 35 papers (don't over-collect)
+    - We have fewer than 50 papers (don't over-collect)
 
     Otherwise: proceed to Writer.
     """
@@ -54,7 +54,7 @@ def should_search_again(state: ResearchState) -> str:
         return "writer"
     if len(gaps) < 2:            # Not enough gaps to justify another search
         return "writer"
-    if len(raw_papers) >= 35:    # Already have plenty of papers
+    if len(raw_papers) >= 50:    # Already have plenty of papers
         return "writer"
     if not gap_queries:          # No gap queries generated
         return "writer"
