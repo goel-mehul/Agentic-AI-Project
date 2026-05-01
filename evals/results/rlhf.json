@@ -1,0 +1,52 @@
+{
+  "question": "How does RLHF work?",
+  "timestamp": "2026-04-30T17:31:30.482734",
+  "overall_score": 0.96,
+  "overall_grade": "A",
+  "passed": 5,
+  "total": 5,
+  "papers_found": 41,
+  "iterations": 3,
+  "metrics": [
+    {
+      "name": "report_completeness",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.75,
+      "details": "4/4 sections present."
+    },
+    {
+      "name": "citation_presence",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.5,
+      "details": "46 citation patterns, 3 title mentions found."
+    },
+    {
+      "name": "question_coverage",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.6,
+      "details": "2/2 question keywords found in report."
+    },
+    {
+      "name": "evidence_grounding",
+      "score": 1.0,
+      "grade": "A",
+      "passed": true,
+      "threshold": 0.4,
+      "details": "Report grounded in 8/8 retrieved sources."
+    },
+    {
+      "name": "critic_quality",
+      "score": 0.7999999999999999,
+      "grade": "C",
+      "passed": true,
+      "threshold": 0.5,
+      "details": "10 gaps identified \u2713 | Quality scores for 8 papers \u2713 | No contradictions (may be fine for some topics)"
+    }
+  ]
+}
