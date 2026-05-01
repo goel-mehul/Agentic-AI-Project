@@ -427,4 +427,178 @@ and the summary field always contains meaningful content.
 | `frontend/src/App.jsx` | Faithfulness score state · sidebar stat · WebSocket handler |
 | `backend/test_*.py` | All test files updated with missing state fields |
 
+## V5 Improvements
+
+A second round of targeted improvements focusing on prompt engineering 
+quality, LLM sampling parameters, and standardized evaluation.
+
+---
+
+### 1. Explicit Temperature Settings Per Agent
+
+**Problem:** All agents were using the Anthropic API default temperature 
+of 1.0. Evaluation agents (Planner, Critic, Fact Checker) benefit from 
+lower temperatures for consistency and precision. The Writer benefits 
+from slightly higher temperature for synthesis quality.
+
+**Fix:** Set explicit temperature per agent based on task type:
+
+| Agent | Temperature | Rationale |
+|-------|-------------|-----------|
+| Planner | 0.3 | Consistent, focused query generation |
+| Critic | 0.2 | Rigorous, deterministic evidence evaluation |
+| Fact Checker | 0.1 | Precise, conservative claim verification |
+| Writer | 0.7 | Creative synthesis with controlled variation |
+
+**Result:** More consistent structured outputs from evaluation agents 
+and better synthesis quality from the Writer.
+
+---
+
+### 2. Chunk Ordering — Lost in the Middle Fix
+
+**Problem:** Retrieved chunks were passed to the Writer in ChromaDB's 
+default cosine similarity order (best first, worst last). Research shows 
+LLMs attend more strongly to content at the beginning and end of long 
+prompts — the "lost in the middle" phenomenon — meaning the second-best 
+chunk was being underweighted.
+
+**Fix:** Implemented optimal chunk ordering before passing to the Writer:
+- Best chunk (highest faithfulness score) → position 1
+- Second best chunk → last position  
+- Remaining chunks → middle positions
+
+```python
+chunks_sorted = sorted(chunks, key=lambda x: x.get('faithfulness_score', 0), reverse=True)
+if len(chunks_sorted) > 1:
+    best        = chunks_sorted[0]
+    remaining   = chunks_sorted[1:]
+    second_best = remaining.pop(0)
+    chunks_sorted = [best] + remaining + [second_best]
+```
+
+**Result:** The Writer now sees the two highest-quality chunks in the 
+most attended positions, improving synthesis quality for the most 
+relevant evidence.
+
+---
+
+### 3. Stronger Chunk Separators with Faithfulness Scores
+
+**Problem:** Chunks were joined with weak `---` separators, risking 
+the model treating all chunks as one continuous block. Faithfulness 
+scores were computed but never visible to the Writer.
+
+**Fix:** Replaced weak separators with explicit labeled separators 
+including per-chunk metadata and faithfulness scores:
+
+=== EXCERPT 1: THaMES (2024-09-17) ===
+Authors: Mengfei Liang | Source: arxiv | Faithfulness score: 0.616
+
+=== EXCERPT 2: How do language models learn facts? (2025-03-27) ===
+Authors: Nicolas Zucchet | Source: arxiv | Faithfulness score: 0.537
+
+**Result:** The Writer can now distinguish chunk boundaries cleanly 
+and reference individual faithfulness scores when calibrating claim 
+confidence. This is visible in Methodology Notes sections where the 
+Writer now explicitly cites per-chunk faithfulness scores and flags 
+lower-scoring sources for appropriate caution.
+
+---
+
+### 4. Grounding Rules in Writer Prompt
+
+**Problem:** The Writer had no explicit instruction to stay within 
+retrieved evidence. It would blend parametric memory with retrieved 
+content, causing the Fact Checker to make 4-9 corrections per run 
+and return Medium confidence ratings.
+
+**Fix:** Added explicit grounding instructions to the Writer system prompt:
+
+GROUNDING RULES:
+- Base every specific claim on the provided excerpts
+- If a specific detail is not explicitly stated in the excerpts,
+do not include it
+- You may contextualize and connect findings, but all specific
+factual claims must trace back to a provided excerpt
+
+WHEN EVIDENCE IS INSUFFICIENT:
+- Do not fabricate claims to fill gaps
+- Explicitly note when important aspects are not covered
+- Add qualifiers: "according to the available abstracts" or
+"based on the provided evidence"
+
+**Result:** Fact Checker corrections dropped from 4-9 per run to 0 
+corrections. Overall confidence improved. The Writer now produces 
+appropriately hedged claims that the Fact Checker can fully verify.
+
+---
+
+### 5. Paper Limit Increased from 35 to 50
+
+**Problem:** The loop condition `len(raw_papers) < 35` was too 
+aggressive. Pass 1 retrieves ~20-25 papers, Pass 2 adds ~15 more — 
+hitting 35-40 papers and blocking further passes even when significant 
+gaps remained. The gap-filling logic was being short-circuited.
+
+**Fix:** Increased paper limit from 35 to 50 in `should_search_again()`.
+
+**Result:** The iterative retrieval loop now runs more effectively across all 3 permitted passes, allowing gap-filling queries to find additional relevant papers. Total papers collected increased from ~35 to ~50 per run.
+
+---
+
+### 6. RAGAs Evaluation Script
+
+**Addition:** Added `evals/eval_ragas.py` — an evaluation script 
+using RAGAs, the industry standard framework for evaluating RAG 
+pipelines, configured to use Claude Haiku as the judge LLM.
+
+Metrics evaluated:
+- **Faithfulness** — are report claims grounded in retrieved chunks?
+- **Answer Relevancy** — does the report address the research question?
+- **Context Precision** — are retrieved chunks relevant to the question?
+- **Context Recall** — did retrieval find everything needed?
+
+```bash
+python evals/eval_ragas.py \
+  --question "How does RLHF work?" \
+  --save evals/results/ragas_v5.json
+```
+
+Note: RAGAs v1.0 dropped support for non-OpenAI LLMs in their 
+InstructorLLM interface. The script uses the latest compatible 
+approach — if RAGAs updates their Anthropic support, this will 
+work without modification.
+
+---
+
+### V5 Evaluation Results
+
+Running the custom 5-metric evaluation suite after v5 improvements:
+
+| Metric | Score | Details |
+|--------|-------|---------|
+| Report Completeness | A (100%) | All 4 required sections present |
+| Citation Presence | A (100%) | 60 citation patterns found |
+| Question Coverage | A (100%) | 8/8 keywords covered |
+| Evidence Grounding | A (100%) | Grounded in 8/8 sources |
+| Critic Quality | A (100%) | 9 gaps, 8 quality scores, 2 contradictions |
+| **Overall** | **A (100%)** | **5/5 metrics passed** |
+
+Fact Checker: **0 corrections** across multiple runs (down from 4-9 in v1)
+
+---
+
+### Summary of Files Changed in V5
+
+| File | Change |
+|------|--------|
+| `backend/agents/planner.py` | temperature=0.3 |
+| `backend/agents/critic.py` | temperature=0.2 on both Haiku calls |
+| `backend/agents/fact_checker.py` | temperature=0.1 |
+| `backend/agents/writer.py` | temperature=0.7 · chunk ordering · stronger separators · grounding rules · not-found behavior |
+| `backend/agents/pipeline.py` | paper limit 35 → 50 |
+| `evals/eval_ragas.py` | New RAGAs evaluation script |
+| `evals/results/custom_eval_v5.json` | V5 evaluation results |
+
 *Built by Mehul Goel · NYU · 2026*
